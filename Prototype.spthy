@@ -2,14 +2,11 @@
     PROTOCOL SCOPE:
    	    1. Standard : IEEE 802.1X-2020 MKA and IEEE 802.1AE-2018 MACsec
 	    2. CipherSuite : AES-GCM 128 (default)
-	    3. Topology description : P2P communication --> group of three devices ( Key Server (A), Peer (B,C) )
+	    3. Topology description : P2P communication ( Key Server (A), Peer (B) )
 	    4. Operational Flow: [ Scenario 01 : Peer Discovery, Key Server Election, SAK Dist, SecY operation, Data Plane communication, PN exhaustion, Rekey ]
-	    [ Scenario 02 : Third member joins establish group CAK, then respective SAK distribution ]
-	    [ Scenario 03 : Another Scenario : Key Server exits, re-election and stale participant elimination ]
-	    5. Assumptions : CAK is pre-configured at each of the PAE of the devices joining CA. 
         6. Mode of Operation : Integrity-only or Confidentiality + Integrity [ Supported via pre-processors ]
 */
-theory Prototype
+theory Prototype begin
 
 builtins: hashing, natural-numbers
 
@@ -22,16 +19,31 @@ functions:
    SAK Generation = KDF( CAK,'IEEE8021 SAK', (KS_Nonce | MI_List | KN), 128 )
 */
 
-KDF/4       //kdf(key, label, context, length) [ ICK and KEK Derivatio; SAK Derivation at KeyServer (KS) ]
+/* kdf(key, label, context, length) [ ICK and KEK Derivatio; SAK Derivation at KeyServer (KS) ] */
+pair/2,
+fst/1,
+snd/1,
+kdf/4, 
+keyserver/0, 
+true/0, 
+peer/0, 
+none/0,
+MI_List/1,        /* MI_List(<miA,miB,...>) — order-independent token (no equations) */
+SAK_ctx/3,        /* SAK_ctx(KS_Nonce, MI_ListToken, %KN) */
+/*---------- AES-CMAC ( ICV computation for MKPDUs ) ---------------*/
+AES_CMAC_auth/3,
+AES_CMAC_verify/4, 
+keylength/0,
+/* --------- AES Key Wrap (RFC 3394, default IV 0xA6…A6)----------- */
+/* (M, KEK, IV),(C, KEK, IV), Default IV = 0xA6A6A6A6A6A6A6A6 */
+AES_KW_wrap/3, 
+AES_KW_unwrap/3, 
+RFC3394_IV/0 
 
-//Constructors
-
-MI_List/1   // order-independent list of MIs of Live participants ( < MI_A, MI_B, ... > )
-SAK_ctx/3   // SAK_ctx(KS_Nonce, MI_List, %KN)  [ KN is a monotonic counter ]
-
-// Constants
-KeyServer/0
-Peer/0
+equations: AES_CMAC_verify( AES_CMAC_auth(ICK, M, keylength()), ICK, M, keylength() ) = true ,
+           AES_KW_unwrap( AES_KW_wrap(M, KEK, RFC3394_IV()), KEK, RFC3394_IV() ) = M ,
+           fst(pair(x, y)) = x ,
+           snd(pair(x, y)) = y
 
 /* --- AEAD interface --- */
 
@@ -51,145 +63,265 @@ functions: AES_GCM_tag/3, AES_GCM_verify/4
 equations: AES_GCM_verify(K, IV, AES_GCM_tag(K, IV, AAD), AAD) = true
 #endif
 
-/* --------- AES Key Wrap (RFC 3394, default IV 0xA6…A6)----------- */
-/* (M, KEK, IV),(C, KEK, IV), Default IV = 0xA6A6A6A6A6A6A6A6 */
-functions: AES_KW_wrap/3, AES_KW_unwrap/3, RFC3394_IV/0
-equations: AES_KW_unwrap( AES_KW_wrap(M, KEK, RFC3394_IV()), KEK, RFC3394_IV() ) = M
-
-/*---------- AES-CMAC ( ICV computation for MKPDUs ) ---------------*/
-functions: AES_CMAC_auth/3, AES_CMAC_verify/4
-equations: AES_CMAC_verify(K, AES_CMAC_auth(K, M, '128'), M, '128') = true
-
-/* --------------- Initialization rules : ICK, KEK from CAK --------------------------------*/
-
-/* ======================================================================================================================================================================================================= */
-
-//facts
-  
-  !CAK(ckn, cak)                                    /* Provision CAK : Long-Term Key */
-  !Member(A, ckn, r)                                /* Membership-with-role of device A, where r ∈ {KeyServer(), Peer()} */
-  HasCAK(A, cak, ckn)                               /* Indicates A possess CAK */
-  ICK(A, ick, ckn)                                  /* Stores the derived ICK */
-  KEK(A, kek, ckn)                                  /* Stores the derived KEK */
-  SAK_Derived(A, sak, ctx, len)                     /* SAK Generated at Key Server end */
-  SAKInstalled(A, sak, an, %kn:nat, sci)            /* SAK Installed successfully at the peer end */
-  SecY_controlledportenable(SCI,an)                 /* Open the controlled port */
-  SecY_Operational(SCI,an)                          /* Enable MACSEC communication (both Tx and Rx) */ 
-
-/* ======================================================================================================================================================================================================== */
-
 /****************************************************
  * MKA MKPDU — Structuring Prototype (Macros-Only)
  * - Frame/block structures are defined as MACROS.
- * - Optional sets are carried in a TLV list (ordered).
- * - Order enforced: Basic, PotentialPeers, LivePeers, SAKUse, DistSAK.
  ****************************************************/
 
 /* ---- Basic Parameter Set (MANDATORY, first) ---- */
 macros:
-  Basic_Param(r, mi, mn) = <"BASIC", r , mi, mn>        // where r ∈ {KeyServer(), Peer()}
+  /* r ∈ {KeyServer(), Peer()} */
 
-/* ---- Peer entries + lists (payload values) ---- */
-  Peer(mi, mn) = <"PEER", mi, mn>
+  TLV(tag, val) = <tag, val>,
+
+  Basic_Param(role, mi, mn) = <'BASIC', role, <mi,mn> >,
+
+  /* ---- Peer entries + lists (payload values) ---- */
+  Peer(mi, mn) = <'PEER', mi, mn>,
 
   // Potential Peer List (PPL) — payload value
-  PPL_Param(p1, p2, p3, p4) = <"PPL", p1, p2, p3, p4>   // use 'none' for unused slots
+  PPL_Param(p1) = <'PPL', p1 >,   // use 'none' for unused slots
 
   // Live Peer List (LPL) — payload value
-  LPL(p1, p2, p3, p4) = <"LPL", p1, p2, p3, p4>   // use 'none' for unused slots
+  LPL_Param(p1) = <'LPL', p1 >,         // use 'none' for unused slots
 
-/* ---- SAK state blocks (payload values) ---- */
-  SAKUse(oldAN, oldTx, oldRx, latestAN, latestTx, latestRx)
-       = <"SAKUSE", oldAN, oldTx, oldRx, latestAN, latestTx, latestRx>
+  /* ---- SAK state blocks (payload values) ---- */
+  SAKUse(latestAN, latestTx, latestRx) = <'SAKUse', latestAN, latestTx, latestRx >,
 
-  DistSAK(an, kn) = <"DISTSAK", an, kn>
+  DistSAK(an, kn, wsak) = < <'DistSAK', an, kn> , wsak >,
 
-/* ---- TLV wrapper for optional blocks ----
- * tag ∈ {"PotentialPeers","LivePeers","SAKUse","DistSAK"}
- * val is one of: PPL_Param(...), LPL(...), SAKUse(...), DistSAK(...)
- */
-  TLV(tag, val) = <tag, val>
+  /* ---- Abstract ICV/MAC over serialized MKPDU ---- */
+  ICV(m,ick) = AES_CMAC_auth(ick, m, keylength()),
 
-/* ---- TLV list constructors (ORDERED) ----
- * We build the list in the exact order as defined in IEEE 802.1X-2020 MKA Documentation:
- *   Basic_ParameterSet → PotentialPeer_ParameterSet → LivePeer_ParameterSet → SAKUse_ParameterSet → DistSAK_ParameterSet
- */
-  TLVS0()                           = nil
-  TLVS_AddPotentialPeers(PPL_Param, rest) = cons(TLV("PotentialPeers", ppl), rest)
-  TLVS_AddLivePeers(lpl, rest)      = cons(TLV("LivePeers",      lpl), rest)
-  TLVS_AddSAKUse(sak_use, rest)          = cons(TLV("SAKUse",         sak_use),  rest)
-  TLVS_AddDistSAK(dist_sak, rest)         = cons(TLV("DistSAK",        dist_sak),  rest)
+/* ---- fixed-size TLV tuple (4 slots) ---- */
+  TLVs0()                                       = < none(), none(), none(), none() >,
+  TLVs_UntilLivePeerList(lpl)                 = < TLV('LivePeers', lpl),        none(),                     none(),                     none() >,
+  TLVs_UntilPotentialPeerList(lpl, ppl)       = < TLV('LivePeers', lpl),        TLV('PotentialPeers', ppl), none(),                none() >,
+  TLVs_UntilSAKUse(lpl, ppl, sak_use)              = < TLV('LivePeers', lpl),        TLV('PotentialPeers', ppl), TLV('SAKUse', sak_use), none() >,
+  TLVs_UntilDistSAK(lpl, ppl, sak_use, dist_sak)         = < TLV('LivePeers', lpl),        TLV('PotentialPeers', ppl), TLV('SAKUse', sak_use), TLV('DistSAK', dist_sak) >,
 
-/* ---- Whole MKPDU (Basic + Ordered TLV list) ---- */
-  MKPDU(Basic_Param, tlvs) = <"MKPDU", Basic_Param, tlvs>
+  MKPDU(basic, tlvs) = <'MKPDU', basic, tlvs>,
 
-/* ---- Abstract ICV/MAC over serialized MKPDU ---- */
-  ICV(m, ick) = mac(m, ick)
+/* ------------------- BUILDERS------------------- */
+
+  /* 1) Hello (Basic only) */
+  Build_KeyServer_Hello(mi, mn, ick)
+    = < MKPDU( Basic_Param(keyserver(), mi, mn), TLVs0() ),
+        ICV( MKPDU( Basic_Param(keyserver(), mi, mn), TLVs0() ), ick) >,
+
+  /* 2) Hello Reply (Basic + PotentialPeers) */
+  Build_Peer_Hello(mi, mn, ppl, ick)
+    = < MKPDU( Basic_Param(peer(), mi, mn),
+               TLVs_UntilPotentialPeerList( none(), ppl ) ),
+        ICV(   MKPDU( Basic_Param(peer(), mi, mn),
+                      TLVs_UntilPotentialPeerList( none(), ppl ) ), ick) >,
+
+  Build_SAK_Install(mi, mn, lpl, sak_use, ick) =
+    < MKPDU( Basic_Param(peer(), mi, mn),
+             TLVs_UntilSAKUse(lpl, none(), sak_use) ),
+      ICV(   MKPDU( Basic_Param(peer(), mi, mn),
+                    TLVs_UntilSAKUse(lpl, none(), sak_use) ), ick) >
+
 
 /****************************************************
- * MKPDU Frame BUILDERS
- ****************************************************/
+ * Protocol rule definition
+****************************************************/
 
-/* 1) Hello ( Basic only ) */
-  Build_KeyServer_Hello(r, mi, mn, ick) =
-    let tl0 = TLVS0() in
-    let m   = MKPDU(Basic_Param(KeyServer(), mi, mn), tl0) in
-    < m, ICV(m, ick) >
+/* Initialization rules 01 : CAK and CKN provisioned */
+rule CAK_Provision:
+  [ Fr(~cak), Fr(~ckn) , Fr(~tid) ]
+  --[ Generate_CAK(~ckn, ~cak), OnceProvisioned() ]->
+  [ !CAK(~cak, ~ckn), !MKA_Session(~tid, ~ckn) ]
 
-/* 2) Hello Reply ( Basic + PotentialPeers ) */
-  Build_Peer_Hello(r, mi, mn, PPL_Param, ick) =
-    let tl0 = TLVS0() in
-    let tl1 = TLVS_AddPotentialPeers(ppl, tl0) in
-    let m   = MKPDU(Basic_Param(Peer(), mi, mn), tl1) in
-    < m, ICV(m, ick) >
 
-/* 3) SAK Distribution ( Basic + PPL + LPL + SAKUse + DistSAK ) */
-  Build_SAKDist(r, mi, mn, ppl, lpl, su, ds, ick) =
-    let tl0 = TLVS0() in
-    let tl1 = TLVS_AddPotentialPeers(ppl, tl0) in
-    let tl2 = TLVS_AddLivePeers(lpl, tl1) in
-    let tl3 = TLVS_AddSAKUse(sak_use, tl2) in
-    let tl4 = TLVS_AddDistSAK(dist_sak, tl3) in
-    let m   = MKPDU(Basic_Param(KeyServer(), mi, mn), tl4) in
-    < m, ICV(m, ick) >
+/* Initialization rules 02 : Role creation to be allocated to the respective KaYs */
+rule Init_role:
+  [!CAK(cak,ckn),!MKA_Session(tid,ckn)]
+  --[ OnlyOnce() ]->
+  [ KS_role(keyserver()), Peer_role(peer())]
 
-/* 4) SAK Installation ( Basic + PPL + LPL + SAKUse ) */
-  Build_SAKInstall(r, mi, mn, ppl, lpl, sak_use, ick) =
-    let tl0 = TLVS0() in
-    let tl1 = TLVS_AddPotentialPeers(ppl, tl0) in
-    let tl2 = TLVS_AddLivePeers(lpl, tl1) in
-    let tl3 = TLVS_AddSAKUse(sak_use, tl2) in
-    let m   = MKPDU(Basic_Param(r, mi, mn), tl3) in
-    < m, ICV(m, ick) >
+/* Initialization rules 03 : Create Key Server, Derive ICK and KEK */
+rule Bootstrap_KaY_KeyServer:
+  [ !CAK(cak, ckn), Fr(~MI_A) , KS_role(keyserver()), !MKA_Session(tid,ckn)]
+  --[ KS_Elected($KaY_A, $Pae_A, tid, ckn) , KeyServer_ICKDerived($KaY_A,ckn,tid), KeyServer_KEKDerived($KaY_A,ckn,tid) ]->
+  [ !Member( $KaY_A, $Pae_A, ckn, keyserver()),
+    !KS_ICK($KaY_A, kdf(cak, 'IEEE8021 ICK', ckn, '128'), ckn),
+    !KS_KEK($KaY_A, kdf(cak, 'IEEE8021 KEK', ckn, '128'), ckn),
+    KS_0('KS_0', $KaY_A, tid, $Pae_A , ~MI_A, %1),
+    KN_State($KaY_A, ckn, %1),
+    KeyServer_Created(tid,ckn)  ]
 
-/* 5) Keepalive/Liveliness ( exchanged periodically every MKA Hello Time (2 seconds)) */
-  Build_LivelinessConfirm(r, mi, mn, ppl, lpl, sak_use, ick) = Build_SAKInstall(r, mi, mn, ppl, lpl, sak_use, ick)
+/* Initialization rules 04 : Create Peer, Derive ICK and KEK */
+rule Bootstrap_KaY_Peer:
+  [ !CAK(cak, ckn), Fr(~MI_B) , Peer_role(peer()), KeyServer_Created(tid,ckn) ]
+  --[ Peer_Created($KaY_B, $Pae_B, tid, ckn), Peer_ICKDerived($KaY_B,ckn,tid), Peer_KEKDerived($KaY_B,ckn,tid) ]->
+  [ !Member($KaY_B, $Pae_B, ckn, peer()),
+    !P_ICK($KaY_B, kdf(cak, 'IEEE8021 ICK', ckn, '128'), ckn),
+    !P_KEK($KaY_B, kdf(cak, 'IEEE8021 KEK', ckn, '128'), ckn),
+    P_0('P_0',$KaY_B, tid, $Pae_B , ~MI_B, %1) ]
 
-/* ======================================================================================================================================================================================================== */
+/* ---------------------------------------------------------------------MKPDU transmission and Reception ----------------------------------------------------------------------------------------*/
 
-/* ----------------------Lemma Properties : to be proven ---------------------------- */
+/* Key Server MKA Hello  */
+rule KS_MKA_Hello:
+let 
+  MKPDU_out = Build_KeyServer_Hello(mi_ks , %mn_ks_0, ick)
+in
+    [ !CAK(cak,ckn),!MKA_Session(tid,ckn),
+      !KS_ICK(KS,ick,ckn),
+      KS_0('KS_0', KS, tid, Pae , mi_ks , %mn_ks_0)
+    ]
+    --[ MKPDU_KS_MKAHello(KS, mi_ks, %mn_ks_0, tid, ckn), MN_State_KS(KS,tid,ckn,%mn_ks_0 %+ %1) ]->
+    [ 
+       Out( MKPDU_out ),
+       KS_1( 'KS_1', KS, tid, Pae , mi_ks , %mn_ks_0 %+ %1 ),
+       KS_Hello_Sent(tid,KS,ckn)
+    ]
 
-/* 
-   1. Authenticity of MKPDU
-   2. Replay Protection against MN maintained in MKPDU
-   3. Key Server exclusivity [ Only the elected Key Server can be the accepted origin of DistSAK messages ]  
-   4. Appropriate SAK acceptance [ a device installs SAK, only if it sees itself within the LPL of Key Server ]
-   5. SAK secrecy
-   6. PN monotonicity [ strict increasing ]
-   7. Replay Protection against PN maintained in MACSEC frames [ Strict Replay window ]
-   8. CAK Key Leakage
-   9. Compromised node --> no impact on uncompromised node, (integrity+secrecy holds with new SAK unknown to 
-      ADversary )
-   10. Algorithm Agility consistency
-   11. Cipher Suite consistency
-   12. Stale elimination safety [ stale participant cannot transmit valid MACSEC frame ]
-   13. CAK Posession Proof [ required to join authorization ]
-   14. Key Server Re-Election
-   15. Uniqueness of SAK / SAK freshness 
-   16. Uninterrupted Re-key [ check for smooth transition from old AN to new AN ]
-   17. PN exhaustion check [ no device transmits with PN greater than PN exhaustion threshold ]
+rule Peer_MKA_HelloAck:
+  let 
+      ppl = PPL_Param(<mi_ks , %mn_ks_0>)
+      MKPDU_in = Build_KeyServer_Hello(mi_ks , %mn_ks_0, ick)
+      MKPDU_out = Build_Peer_Hello(mi_p, %mn_p_0, ppl, ick)
+  in
+  [ 
+    !CAK(cak,ckn),!MKA_Session(tid,ckn),
+    P_0('P_0', P, tid, Pae, mi_p, %mn_p_0),
+    !P_ICK(P,ick,ckn),
+    In( MKPDU_in ),
+    KS_Hello_Sent(tid,KS,ckn)
+  ]
+  --[ MKPDU_Peer_Hello(P, mi_p, %mn_p_0, tid, ckn) , MN_State_P(P,tid,ckn,%mn_p_0 %+ %1) ,
+      Eq(true, AES_CMAC_verify(snd(MKPDU_in),ick, fst(MKPDU_in), keylength()))
+    ]->
+  [ Out( MKPDU_out ),
+    P_1('P_1', P, tid, Pae, mi_p, %mn_p_0 %+ %1),
+    P_Hello_Sent(tid,P,ckn)
+  ]
 
-*/
+rule KS_Recv_Peer_Hello:
+let  
+    ppl = PPL_Param(<mi_ks , %mn_ks_0>)
+    MKPDU_in = Build_Peer_Hello(mi_p, %mn_p_0, ppl, ick)
+in
+  [ !Member(KS, Pae, ckn, keyserver()), !MKA_Session(tid,ckn),
+    !KS_ICK(KS,ick,ckn),
+    In( MKPDU_in ),
+    P_Hello_Sent(tid,P,ckn)
+  ]
+  --[ KS_Saw_Self_In_PPL(KS, mi_ks, %mn_ks_0, tid, ckn) , Eq(true, AES_CMAC_verify(snd(MKPDU_in),ick, fst(MKPDU_in), keylength())) 
+  ]->
+  [ 
+    KS_Peer_Reciprocal(KS, mi_p, %mn_p_0, tid, ckn),
+    KS_PeerList( mi_ks, mi_p )
+  ]
 
-   
-   
+rule Derive_SAK:
+[ !CAK(cak,ckn),!Member(KS, Pae, ckn, keyserver()), !MKA_Session(tid, ckn), Fr(~ks_n), KN_State(KS, ckn, %kn),
+  KS_Peer_Reciprocal(KS, mi_p, %mn_p_0, tid, ckn),
+  KS_PeerList( mi_ks, mi_p ) 
+]
+--[ SAK_Derived(KS, ckn, tid, %kn)]->
+[
+  !SAK(KS, keyserver(), kdf(cak, 'IEEE8021 SAK', SAK_ctx(~ks_n, < mi_ks, mi_p >, %kn), '128'), %kn),
+  KN_State(KS, ckn, %kn %+ %1 ),
+  KS_Peer_Confirm(mi_p, %mn_p_0, tid)
+]
+
+rule Prepare_SAK:
+let 
+    wsak = AES_KW_wrap(sak, kek, RFC3394_IV())
+in
+[ !KS_KEK(KS,kek,ckn), !MKA_Session(tid, ckn) ,
+  !SAK(KS,keyserver(),sak,%kn)
+]
+--[ SAK_Wrapped(KS,tid,ckn,%kn) ]->
+[
+  SAK_Wrapped(KS,wsak,%kn,ckn)
+]
+
+rule KS_Distribute_SAK:
+  let
+      MKPDU_out = <'MKPDU', DistSAK('AN0', %kn, wsak) > 
+  in
+  [  
+    !KS_ICK(KS,ick,ckn), !MKA_Session(tid, ckn) ,
+    SAK_Wrapped(KS, wsak, %kn, ckn), KS_Peer_Confirm(mi_p, %mn_p_0, tid),
+    KS_1( 'KS_1', KS, tid, Pae , mi_ks , %mn_ks_1)
+  ]
+  --[ KS_SAKDistributed(KS, ckn, tid, %kn), MN_State_KS(KS,tid,ckn,%mn_ks_1 %+ %1) ]->
+  [ 
+    Out( < MKPDU_out , ICV(MKPDU_out,ick) > ),
+    KS_2( 'KS_2', KS, tid, Pae , mi_ks , %mn_ks_1 %+ %1),
+    KS_SAKDistributed(KS, ckn, tid, %kn)
+  ]
+
+rule Peer_Install_SAK:
+  let 
+      lpl = LPL_Param(<mi_ks,%mn_ks_1>)
+      sak_use = SAKUse('AN0',true,true)
+      MKPDU_in = <'MKPDU', DistSAK('AN0', %kn, wsak) >
+      MKPDU_out = Build_SAK_Install(mi_p, %mn_p_1,lpl,sak_use,ick)
+      rcv_wsak = snd(snd(MKPDU_in))
+  in
+[
+    !P_ICK(P,ick,ckn), !MKA_Session(tid, ckn) ,
+    P_1('P_1', P, tid, Pae, mi_p, %mn_p_1),
+    In( < MKPDU_in, MKPDU_tag >),
+    KS_SAKDistributed(KS, ckn, tid, %kn)
+
+]
+--[ P_SAKInstalled(P,ckn,tid, %kn), MN_State_P(P,tid,ckn,%mn_p_1 %+ %1) , 
+    Eq( true, AES_CMAC_verify(MKPDU_tag, ick, MKPDU_in, keylength()) )
+]->
+[
+    P2('P_2', P, tid, Pae, mi_p, %mn_p_1 %+ %1),
+    P_SAKInstalled(P,ckn,tid,%kn), Rcv_SAK_Wrapped(P, rcv_wsak, %kn, ckn)
+]
+
+restriction OnlyOnce :
+  " All #i #j. OnlyOnce() @i & OnlyOnce() @j ==> #i = #j "
+
+restriction OnceProvisioned :
+  " All #i #j. OnceProvisioned() @i & OnceProvisioned() @j ==> #i = #j "
+
+restriction equality:
+  "All x y #i. Eq(x, y) @ i ==> x = y"
+
+lemma MN_KS_strict_increase [use_induction, reuse]:
+   "All KS tid ckn %mn1 %mn2 #i #j.
+    ( MN_State_KS(KS,tid,ckn,%mn1)@i & MN_State_KS(KS,tid,ckn,%mn2)@j & #i < #j )
+    ==> %mn1 << %mn2
+   "
+lemma MN_P_strict_increase [use_induction, reuse]:
+   "All KS tid ckn %mn1 %mn2 #i #j.
+    ( MN_State_P(KS,tid,ckn,%mn1)@i & MN_State_P(KS,tid,ckn,%mn2)@j & #i < #j )
+    ==> %mn1 << %mn2
+   "
+
+lemma reachability:
+  exists-trace
+  " Ex ckn cak KS P Pae_A Pae_B tid mi_a mn_a mi_b mn_b kn #i1 #i2 #i3 #i4 #i5 #i6 #i7 #i8 #i9 #i10 #i11 #i12 #i13 #i14 #i15. 
+    Generate_CAK(ckn,cak)@i1 &
+    OnceProvisioned()@i2 &
+    OnlyOnce()@i3 &
+    KS_Elected(KS, Pae_A, tid, ckn)@i4 &
+    Peer_Created(P, Pae_B, tid, ckn)@i5 &
+    KeyServer_ICKDerived(KS,ckn,tid)@i6 &
+    KeyServer_KEKDerived(KS,ckn,tid)@i7 &
+    Peer_ICKDerived(P,ckn,tid)@i8 &
+    Peer_KEKDerived(P,ckn,tid)@i9 &
+    MKPDU_KS_MKAHello(KS, mi_a, mn_a, tid, ckn)@i10 &
+    MKPDU_Peer_Hello(P,mi_b,mn_b, tid,ckn)@i11 &
+    KS_Saw_Self_In_PPL(KS, mi_a, mn_a, tid, ckn)@i12 &
+    SAK_Derived(KS, ckn, tid, kn)@i13 &
+    KS_SAKDistributed(KS, ckn, tid, kn)@i14 &
+    P_SAKInstalled(P,ckn,tid,kn)@i15
+  "
+lemma MKA_hello_exchange:
+  "All P mi_b mn_b tid ckn #i.
+    MKPDU_Peer_Hello(P, mi_b, mn_b, tid, ckn)@i ==>
+      (Ex KS mi_a mn_a #j.
+         MKPDU_KS_MKAHello(KS, mi_a, mn_a, tid, ckn)@j & #j < #i )"
+
+end
