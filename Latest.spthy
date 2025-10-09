@@ -20,9 +20,6 @@ functions:
 */
 
 /* kdf(key, label, context, length) [ ICK and KEK Derivatio; SAK Derivation at KeyServer (KS) ] */
-pair/2,
-fst/1,
-snd/1,
 kdf/4, 
 keyserver/0, 
 true/0, 
@@ -41,9 +38,7 @@ AES_KW_unwrap/3,
 RFC3394_IV/0 
 
 equations: AES_CMAC_verify( AES_CMAC_auth(ICK, M, keylength()), ICK, M, keylength() ) = true ,
-           AES_KW_unwrap( AES_KW_wrap(M, KEK, RFC3394_IV()), KEK, RFC3394_IV() ) = M ,
-           fst(pair(x, y)) = x ,
-           snd(pair(x, y)) = y
+           AES_KW_unwrap( AES_KW_wrap(M, KEK, RFC3394_IV()), KEK, RFC3394_IV() ) = M 
 
 /* --- AEAD interface --- */
 
@@ -115,7 +110,13 @@ macros:
                TLVs_UntilPotentialPeerList( none(), ppl ) ),
         ICV(   MKPDU( Basic_Param(peer(), mi, mn),
                       TLVs_UntilPotentialPeerList( none(), ppl ) ), ick) >,
-
+  
+  Build_SAK_Distribute(mi, mn, lpl, sak_use, dist_sak, ick) =
+    < MKPDU( Basic_Param(peer(), mi, mn),
+             TLVs_UntilDistSAK(lpl, none(), sak_use, dist_sak) ),
+      ICV(  MKPDU( Basic_Param(peer(), mi, mn),
+             TLVs_UntilDistSAK(lpl, none(), sak_use, dist_sak) ), ick) > ,
+  
   Build_SAK_Install(mi, mn, lpl, sak_use, ick) =
     < MKPDU( Basic_Param(peer(), mi, mn),
              TLVs_UntilSAKUse(lpl, none(), sak_use) ),
@@ -223,17 +224,17 @@ rule Derive_SAK:
 ]
 --[ SAK_Derived(KS, ckn, tid, %kn)]->
 [
-  !SAK(KS, keyserver(), kdf(cak, 'IEEE8021 SAK', SAK_ctx(~ks_n, < mi_ks, mi_p >, %kn), '128'), %kn),
+  !SAK_KS('KeyServer',KS, kdf(cak, 'IEEE8021 SAK', SAK_ctx(~ks_n, < mi_ks, mi_p >, %kn), '128'), %kn),
   KN_State(KS, ckn, %kn %+ %1 ),
   KS_Peer_Confirm(mi_p, %mn_p_0, tid)
 ]
 
 rule Prepare_SAK:
 let 
-    wsak = AES_KW_wrap(sak, kek, RFC3394_IV())
+    wsak = AES_KW_wrap(sak_sk, kek, RFC3394_IV())
 in
 [ !KS_KEK(KS,kek,ckn), !MKA_Session(tid, ckn) ,
-  !SAK(KS,keyserver(),sak,%kn)
+  !SAK_KS('KeyServer',KS,sak_sk,%kn)
 ]
 --[ SAK_Wrapped(KS,tid,ckn,%kn) ]->
 [
@@ -242,41 +243,62 @@ in
 
 rule KS_Distribute_SAK:
   let
-      MKPDU_out = <'MKPDU', DistSAK('AN0', %kn, wsak) > 
+      lpl      = LPL_Param(< mi_p, %mn_p_0 >)
+      sak_use  = SAKUse('AN0', true, true)
+      dist_sak = DistSAK('AN0', %kn, wsak)
+      MKPDU_out = Build_SAK_Distribute(mi_ks, %mn_ks_1, lpl, sak_use, dist_sak, ick)
   in
   [  
     !KS_ICK(KS,ick,ckn), !MKA_Session(tid, ckn) ,
     SAK_Wrapped(KS, wsak, %kn, ckn), KS_Peer_Confirm(mi_p, %mn_p_0, tid),
     KS_1( 'KS_1', KS, tid, Pae , mi_ks , %mn_ks_1)
   ]
-  --[ KS_SAKDistributed(KS, ckn, tid, %kn), MN_State_KS(KS,tid,ckn,%mn_ks_1 %+ %1) ]->
+  --[ MKPDU_KS_SAKDistributed(KS, ckn, tid, %kn), MN_State_KS(KS,tid,ckn,%mn_ks_1 %+ %1) ]->
   [ 
-    Out( < MKPDU_out , ICV(MKPDU_out,ick) > ),
+    Out( MKPDU_out ),
     KS_2( 'KS_2', KS, tid, Pae , mi_ks , %mn_ks_1 %+ %1),
     KS_SAKDistributed(KS, ckn, tid, %kn)
   ]
 
 rule Peer_Install_SAK:
   let 
-      lpl = LPL_Param(<mi_ks,%mn_ks_1>)
-      sak_use = SAKUse('AN0',true,true)
-      MKPDU_in = <'MKPDU', DistSAK('AN0', %kn, wsak) >
-      MKPDU_out = Build_SAK_Install(mi_p, %mn_p_1,lpl,sak_use,ick)
+      lpl_in      = LPL_Param(< mi_p, %mn_p_0 >)
+      sak_use_in  = SAKUse('AN0', true, true)
+      dist_sak_in = DistSAK('AN0', %kn, wsak)
+      MKPDU_in = Build_SAK_Distribute(mi_ks, %mn_ks_1, lpl_in, sak_use_in, dist_sak_in, ick)
+      
+      lpl_out = LPL_Param(<mi_ks,%mn_ks_1>)
+      sak_use_out = SAKUse('AN0',true,true)      
+      MKPDU_out = Build_SAK_Install(mi_p, %mn_p_1, lpl_out, sak_use_out, ick)
       rcv_wsak = snd(snd(MKPDU_in))
   in
 [
     !P_ICK(P,ick,ckn), !MKA_Session(tid, ckn) ,
     P_1('P_1', P, tid, Pae, mi_p, %mn_p_1),
-    In( < MKPDU_in, MKPDU_tag >),
+    In( MKPDU_in ),
     KS_SAKDistributed(KS, ckn, tid, %kn)
 
 ]
---[ P_SAKInstalled(P,ckn,tid, %kn), MN_State_P(P,tid,ckn,%mn_p_1 %+ %1) , 
-    Eq( true, AES_CMAC_verify(MKPDU_tag, ick, MKPDU_in, keylength()) )
+--[ MKPDU_Peer_SAKInstalled(P,ckn,tid, %kn), MN_State_P(P,tid,ckn,%mn_p_1 %+ %1) , 
+    Eq(true, AES_CMAC_verify(snd(MKPDU_in),ick, fst(MKPDU_in), keylength()))
 ]->
 [
     P2('P_2', P, tid, Pae, mi_p, %mn_p_1 %+ %1),
-    P_SAKInstalled(P,ckn,tid,%kn), Rcv_SAK_Wrapped(P, rcv_wsak, %kn, ckn)
+    Out( MKPDU_out ),
+    Rcv_SAK_Wrapped(P, rcv_wsak, %kn, ckn)
+]
+
+rule Peer_Unwrap_SAK:
+let 
+    p_sak = AES_KW_unwrap( rcv_wsak , kek, RFC3394_IV() )
+in
+[ 
+  !P_KEK(P,kek,ckn), !MKA_Session(tid, ckn) ,
+  Rcv_SAK_Wrapped(P, rcv_wsak, %kn, ckn)
+]
+--[ P_SAKUnwrapped(P, tid, ckn, %kn) ]->
+[ 
+  !SAK_P('Peer', P, p_sak, %kn)
 ]
 
 restriction OnlyOnce :
@@ -301,7 +323,7 @@ lemma MN_P_strict_increase [use_induction, reuse]:
 
 lemma reachability:
   exists-trace
-  " Ex ckn cak KS P Pae_A Pae_B tid mi_a mn_a mi_b mn_b kn #i1 #i2 #i3 #i4 #i5 #i6 #i7 #i8 #i9 #i10 #i11 #i12 #i13 #i14 #i15. 
+  " Ex ckn cak KS P Pae_A Pae_B tid mi_a mn_a mi_b mn_b kn #i1 #i2 #i3 #i4 #i5 #i6 #i7 #i8 #i9 #i10 #i11 #i12 #i13 #i14 #i15 #i16. 
     Generate_CAK(ckn,cak)@i1 &
     OnceProvisioned()@i2 &
     OnlyOnce()@i3 &
@@ -315,13 +337,33 @@ lemma reachability:
     MKPDU_Peer_Hello(P,mi_b,mn_b, tid,ckn)@i11 &
     KS_Saw_Self_In_PPL(KS, mi_a, mn_a, tid, ckn)@i12 &
     SAK_Derived(KS, ckn, tid, kn)@i13 &
-    KS_SAKDistributed(KS, ckn, tid, kn)@i14 &
-    P_SAKInstalled(P,ckn,tid,kn)@i15
+    SAK_Wrapped(KS,tid,ckn, kn)@i14 &
+    MKPDU_KS_SAKDistributed(KS, ckn, tid, kn)@i15 &
+    MKPDU_Peer_SAKInstalled(P,ckn,tid,kn)@i16 &
+    P_SAKUnwrapped(P, tid, ckn, kn)@i17
   "
-lemma MKA_hello_exchange:
-  "All P mi_b mn_b tid ckn #i.
-    MKPDU_Peer_Hello(P, mi_b, mn_b, tid, ckn)@i ==>
-      (Ex KS mi_a mn_a #j.
-         MKPDU_KS_MKAHello(KS, mi_a, mn_a, tid, ckn)@j & #j < #i )"
+  lemma MKA_Handshake_Orderliness:
+  "All P tid ckn kn #i1.
+     MKPDU_Peer_SAKInstalled(P, ckn, tid, kn) @ #i1 ==>
+     ( Ex KS mi_b mn_b mi_a mn_a #i2 #i3 #i4.
+         MKPDU_KS_SAKDistributed(KS, ckn, tid, kn) @ #i2 &
+         MKPDU_Peer_Hello(P, mi_b, mn_b, tid, ckn)   @ #i3 &
+         MKPDU_KS_MKAHello(KS, mi_a, mn_a, tid, ckn) @ #i4 &
+         ( #i4 < #i3 ) &
+         ( #i3 < #i2 ) &
+         ( #i2 < #i1 )
+     )"
 
+  lemma Peer_Precedency:
+  "All P Pae_B tid ckn #i. Peer_Created(P, Pae_B, tid, ckn)@i ==> 
+     (Ex KS Pae_A #j. KS_Elected(KS, Pae_A, tid, ckn)@j & #j < #i )"
+
+  lemma ICK_Derivability_Check:
+  "All KS P ckn tid #i #j. Peer_ICKDerived(P,ckn,tid)@i & KeyServer_ICKDerived(KS,ckn,tid)@j ==>
+   ( Ex cak ckn #k. Generate_CAK(ckn,cak)@k & (#k < #i) & (#k < #j) )
+  "
+  lemma KEK_Derivability_Check:
+  "All KS P ckn tid #i #j. Peer_KEKDerived(P,ckn,tid)@i & KeyServer_KEKDerived(KS,ckn,tid)@j ==>
+   ( Ex cak ckn #k. Generate_CAK(ckn,cak)@k & (#k < #i) & (#k < #j) )
+  "
 end
