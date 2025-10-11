@@ -290,7 +290,7 @@ rule KeyServer_SecY_Configure:
   ]->
 [
     !KS_Tx_SC ( tid, 'keyserver', KS, KS_SecY, SCI_A ),
-    !KS_Rx_SC ( tid, 'keyserver', P, KS_SecY, SCI_B ),
+    !KS_Rx_SC ( tid, 'keyserver', KS, KS_SecY, SCI_B ),
     KS_SecY_1( 'SC_Init', KS, tid, KS_SecY )
 ]
 
@@ -301,7 +301,7 @@ in
 [
     !MKA_Session(tid, ckn), !SAK_KS('keyserver',KS,sak_sk,%kn),
     !KS_Tx_SC ( tid, 'keyserver', KS, KS_SecY, SCI_A ), 
-    !KS_Rx_SC ( tid, 'keyserver', P, KS_SecY, SCI_B ),
+    !KS_Rx_SC ( tid, 'keyserver', KS, KS_SecY, SCI_B ),
     KS_SecY_1( 'SC_Init', KS, tid, KS_SecY )
 ]
 --[ KS_Tx_SA_Create(tid, KS, KS_SecY, SCI_A), KS_Rx_SA_Create(tid, KS, KS_SecY, SCI_B) ]->
@@ -310,6 +310,7 @@ in
     KS_Rx_SAInit( tid, 'keyserver', KS_SecY, sak_sk, SCI_B, 'AN0', %1, InUse ),
     KS_SecY_2( 'SA_Init', KS, tid, KS_SecY )
 ]
+
 
 rule Peer_Install_SAK:
   let 
