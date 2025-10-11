@@ -349,7 +349,7 @@ rule Peer_SecY_Configure:
   ]->
 [
     !P_Tx_SC ( tid, 'peer', P, P_SecY, SCI_B ),
-    !P_Rx_SC ( tid, 'peer', KS, KS_SecY, SCI_A ),
+    !P_Rx_SC ( tid, 'peer', P, P_SecY, SCI_A ),
     P_SecY_1( 'SC_Init', P, tid, P_SecY )
 ]
 
@@ -364,6 +364,23 @@ in
 --[ P_SAKUnwrapped(P, tid, ckn, %kn) ]->
 [ 
   !SAK_P('peer', P, sak_p, %kn)
+]
+
+rule Peer_SecY_SA_Init:
+let 
+    InUse = 'True'
+in
+[
+    !MKA_Session(tid, ckn), !SAK_P('peer', P, sak_p, %kn),
+    !P_Tx_SC ( tid, 'peer', P, P_SecY, SCI_B ),
+    !P_Rx_SC ( tid, 'peer', P, P_SecY, SCI_A ),
+    P_SecY_1( 'SC_Init', P, tid, P_SecY )
+]
+--[ P_Tx_SA_Create(tid, P, P_SecY, SCI_B), P_Rx_SA_Create(tid, P, P_SecY, SCI_A) ]->
+[
+    P_Tx_SAInit( tid, 'peer', P_SecY, sak_p, SCI_B, 'AN0', %1, InUse ),
+    P_Rx_SAInit( tid, 'peer', P_SecY, sak_p, SCI_A, 'AN0', %1, InUse ),
+    P_SecY_2( 'SA_Init', P, tid, P_SecY )
 ]
 
 restriction OnlyOnce :
@@ -408,7 +425,7 @@ lemma MN_P_strict_increase [use_induction, reuse]:
 lemma reachability:
   exists-trace
   " Ex ckn cak KS P Pae_A Pae_B tid mi_a mn_a mi_b mn_b kn KS_SecY P_SecY SCI_A SCI_B 
-    #i1 #i2 #i3 #i4 #i5 #i6 #i7 #i8 #i9 #i10 #i11 #i12 #i13 #i14 #i15 #i16 #i17 #i18 #i19 #i20 #i21 #i22 #i23 #i24 #i25. 
+    #i1 #i2 #i3 #i4 #i5 #i6 #i7 #i8 #i9 #i10 #i11 #i12 #i13 #i14 #i15 #i16 #i17 #i18 #i19 #i20 #i21 #i22 #i23 #i24 #i25 #i26 #i27 #i28 #i29. 
     Generate_CAK(ckn,cak)@i1 &
     OnlyOnce_CAKProvision()@i2 &
     OnlyOnce()@i3 &
@@ -433,7 +450,11 @@ lemma reachability:
     KS_TxSC_Create(tid, KS, KS_SecY, SCI_A)@i22 &
     KS_RxSC_Create(tid, KS, KS_SecY, SCI_B)@i23 &
     KS_Tx_SA_Create(tid, KS, KS_SecY, SCI_A)@i24 &
-    KS_Rx_SA_Create(tid, KS, KS_SecY, SCI_B)@i25
+    KS_Rx_SA_Create(tid, KS, KS_SecY, SCI_B)@i25 &  
+    P_TxSC_Create(tid, P, P_SecY, SCI_B)@i26 & 
+    P_RxSC_Create(tid, P, P_SecY, SCI_A)@i27 &
+    P_Tx_SA_Create(tid, P, P_SecY, SCI_B)@i28 &
+    P_Rx_SA_Create(tid, P, P_SecY, SCI_A)@i29
   "
   lemma MKA_Handshake_Orderliness:
   "All P tid ckn kn #i1.
@@ -463,6 +484,14 @@ lemma reachability:
   "All tid KS SecY SCI_A SCI_B #i #j.
        KS_Tx_SA_Create(tid, KS, SecY, SCI_A)@i & KS_Rx_SA_Create(tid, KS, SecY, SCI_B)@j ==> 
        (Ex #m #n. KS_TxSC_Create(tid, KS, SecY, SCI_A)@m & KS_RxSC_Create(tid, KS, SecY, SCI_B)@n &
+       (#m < #i) &
+       (#n < #j)
+       )
+  "
+  lemma Peer_SA_requirement:
+  "All tid P SecY SCI_A SCI_B #i #j.
+       P_Tx_SA_Create(tid, P, SecY, SCI_B)@i & P_Rx_SA_Create(tid, P, SecY, SCI_A)@j ==> 
+       (Ex #m #n. P_TxSC_Create(tid, P, SecY, SCI_B)@m & P_RxSC_Create(tid, P, SecY, SCI_A)@n &
        (#m < #i) &
        (#n < #j)
        )
