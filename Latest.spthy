@@ -114,21 +114,21 @@ macros:
 /* Initialization rules 01 : CAK and CKN provisioned */
 rule CAK_Provision:
   [ Fr(~cak), Fr(~ckn) , Fr(~tid) ]
-  --[ Generate_CAK(~ckn, ~cak), OnlyOnce_CAKProvision() ]->
-  [ !CAK(~cak, ~ckn), !MKA_Session(~tid, ~ckn) ]
+  --[ Generate_CAK(~ckn, ~cak) ]->
+  [ CAK(~cak, ~ckn), MKA_Session(~tid, ~ckn) ]
 
 
 /* Initialization rules 02 : Role creation to be allocated to the respective KaYs */
 rule Init_role:
-  [!CAK(cak,ckn),!MKA_Session(tid,ckn)]
+  [ CAK(cak,ckn), MKA_Session(tid,ckn)]
   --[ OnlyOnce() ]->
-  [ KS_role('keyserver'), Peer_role('peer')]
+  [ KS_role( tid, 'keyserver', cak, ckn ), Peer_role( tid, 'peer', cak, ckn)]
 
 /* Initialization rules 03 : Create Key Server, Derive ICK and KEK */
 rule Bootstrap_KaY_KeyServer:
-  [ !CAK(cak, ckn), Fr(~MI_A) , KS_role('keyserver'), !MKA_Session(tid,ckn)]
+  [ Fr(~MI_A) , KS_role( tid, 'keyserver', cak, ckn) ]
   --[ KS_Elected($KaY_A, $Pae_A, tid, ckn) , KeyServer_ICKDerived($KaY_A,ckn,tid), KeyServer_KEKDerived($KaY_A,ckn,tid) ]->
-  [ !Member( $KaY_A, $Pae_A, ckn, 'keyserver'),
+  [ !Member( tid, $KaY_A, $Pae_A, cak, ckn, 'keyserver'),
     !KS_ICK($KaY_A, kdf(cak, 'IEEE8021 ICK', ckn, '128'), ckn),
     !KS_KEK($KaY_A, kdf(cak, 'IEEE8021 KEK', ckn, '128'), ckn),
     KS_0('KS_0', $KaY_A, tid, $Pae_A , ~MI_A, %1),
@@ -137,19 +137,19 @@ rule Bootstrap_KaY_KeyServer:
 
 /* Initialization rules 04 : Create Peer, Derive ICK and KEK */
 rule Bootstrap_KaY_Peer:
-  [ !CAK(cak, ckn), Fr(~MI_B) , Peer_role('peer'), KeyServer_Created(tid,ckn) ]
+  [ Fr(~MI_B) , Peer_role( tid, 'peer', cak, ckn), KeyServer_Created(tid,ckn) ]
   --[ Peer_Created($KaY_B, $Pae_B, tid, ckn), Peer_ICKDerived($KaY_B,ckn,tid), Peer_KEKDerived($KaY_B,ckn,tid) ]->
-  [ !Member($KaY_B, $Pae_B, ckn, 'peer'),
+  [ !Member( tid, $KaY_B, $Pae_B, cak, ckn, 'peer'),
     !P_ICK($KaY_B, kdf(cak, 'IEEE8021 ICK', ckn, '128'), ckn),
     !P_KEK($KaY_B, kdf(cak, 'IEEE8021 KEK', ckn, '128'), ckn),
     P_0('P_0',$KaY_B, tid, $Pae_B , ~MI_B, %1), Peer_SecYInitPending(tid,$KaY_B,ckn) ]
 
 rule Bootstrap_SecY_KeyServer:
   [
-     !Member(KS, Pae, ckn, 'keyserver'), !MKA_Session(tid,ckn), Fr(~SCI_A),
+     !Member( tid, KS, Pae, cak, ckn,'keyserver'), Fr(~SCI_A),
      KeyServer_SecYInitPending(tid, KS, ckn)
   ]
---[ SecY_KS_Established(tid, KS , $SecY_A, ~SCI_A, ckn), OnlyOnce_KS_SecY_Provision()]->
+--[ SecY_KS_Established(tid, KS , $SecY_A, ~SCI_A, ckn)]->
   [
      !KeyServer_SecYCreated(tid, 'keyserver', KS, $SecY_A, ~SCI_A ),
      KS_SecY_0( 'Create', KS, tid, $SecY_A )
@@ -157,10 +157,10 @@ rule Bootstrap_SecY_KeyServer:
 
 rule Bootstrap_SecY_Peer:
   [
-     !Member(P, Pae, ckn, 'peer'), !MKA_Session(tid,ckn), Fr(~SCI_B),
+     !Member( tid, P, Pae, cak, ckn, 'peer'), Fr(~SCI_B),
      Peer_SecYInitPending(tid, P, ckn)
   ]
---[ SecY_P_Established(tid, P , $SecY_B, ~SCI_B, ckn), OnlyOnce_P_SecY_Provision()]->
+--[ SecY_P_Established(tid, P , $SecY_B, ~SCI_B, ckn) ]->
   [
      !Peer_SecYCreated(tid, 'peer', P, $SecY_B, ~SCI_B ),
      P_SecY_0( 'Create', P, tid, $SecY_B )
@@ -172,15 +172,14 @@ rule KS_MKA_Hello:
 let 
   MKPDU_out = Build_KeyServer_Hello(mi_ks , %mn_ks_0, ick)
 in
-    [ !CAK(cak,ckn),!MKA_Session(tid,ckn),
+    [ !Member( tid, KS, Pae, cak, ckn,'keyserver'),
       !KS_ICK(KS,ick,ckn),
       KS_0('KS_0', KS, tid, Pae , mi_ks , %mn_ks_0)
     ]
     --[ MKPDU_KS_MKAHello(KS, mi_ks, %mn_ks_0, tid, ckn), MN_State_KS(KS,tid,ckn,%mn_ks_0 %+ %1) ]->
     [ 
        Out( MKPDU_out ),
-       KS_1( 'KS_1', KS, tid, Pae , mi_ks , %mn_ks_0 %+ %1 ),
-       KS_Hello_Sent(tid,KS,ckn)
+       KS_1( 'KS_1', KS, tid, Pae , mi_ks , %mn_ks_0 %+ %1 )
     ]
 
 rule Peer_MKA_HelloAck:
@@ -190,18 +189,17 @@ rule Peer_MKA_HelloAck:
       MKPDU_out = Build_Peer_Hello(mi_p, %mn_p_0, ppl, ick)
   in
   [ 
-    !CAK(cak,ckn),!MKA_Session(tid,ckn),
+    !Member( tid, P, Pae, cak, ckn, 'peer'),
     P_0('P_0', P, tid, Pae, mi_p, %mn_p_0),
     !P_ICK(P,ick,ckn),
-    In( MKPDU_in ),
-    KS_Hello_Sent(tid,KS,ckn)
+    In( MKPDU_in )
   ]
   --[ MKPDU_Peer_Hello(P, mi_p, %mn_p_0, tid, ckn) , MN_State_P(P,tid,ckn,%mn_p_0 %+ %1) ,
       Eq(true, AES_CMAC_verify(snd(MKPDU_in),ick, fst(MKPDU_in), keylength()))
     ]->
-  [ Out( MKPDU_out ),
-    P_1('P_1', P, tid, Pae, mi_p, %mn_p_0 %+ %1),
-    P_Hello_Sent(tid,P,ckn)
+  [ 
+    Out( MKPDU_out ),
+    P_1('P_1', P, tid, Pae, mi_p, %mn_p_0 %+ %1)
   ]
 
 rule KS_Recv_Peer_Hello:
@@ -209,22 +207,21 @@ let
     ppl = PPL_Param(<mi_ks , %mn_ks_0>)
     MKPDU_in = Build_Peer_Hello(mi_p, %mn_p_0, ppl, ick)
 in
-  [ !Member(KS, Pae, ckn, 'keyserver'), !MKA_Session(tid,ckn),
+  [ !Member(tid, KS, Pae, cak, ckn, 'keyserver'),
     !KS_ICK(KS,ick,ckn),
     In( MKPDU_in ),
-    P_Hello_Sent(tid,P,ckn)
+    P_1('P_1', P, tid, Pae, mi_p, %mn_p_1)
   ]
   --[ KS_Saw_Self_In_PPL(KS, mi_ks, %mn_ks_0, tid, ckn) , Eq(true, AES_CMAC_verify(snd(MKPDU_in),ick, fst(MKPDU_in), keylength())) 
   ]->
   [ 
-    KS_Peer_Reciprocal(KS, mi_p, %mn_p_0, tid, ckn),
-    KS_PeerList( mi_ks, mi_p )
+    KS_Peer_Reciprocal(KS, mi_ks, mi_p, %mn_p_0, tid, ckn),
+    P_2('P_2', P, tid, Pae, mi_p, %mn_p_1)
   ]
 
 rule Derive_SAK:
-[ !CAK(cak,ckn),!Member(KS, Pae, ckn, 'keyserver'), !MKA_Session(tid, ckn), Fr(~ks_n), KN_State(KS, ckn, %kn),
-  KS_Peer_Reciprocal(KS, mi_p, %mn_p_0, tid, ckn),
-  KS_PeerList( mi_ks, mi_p ) 
+[ !Member(tid, KS, Pae, cak, ckn, 'keyserver'), Fr(~ks_n), KN_State(KS, ckn, %kn),
+  KS_Peer_Reciprocal(KS, mi_ks, mi_p, %mn_p_0, tid, ckn),
 ]
 --[ SAK_Derived(KS, ckn, tid, %kn)]->
 [
@@ -237,7 +234,9 @@ rule Prepare_SAK:
 let 
     wsak = AES_KW_wrap(sak_sk, kek, RFC3394_IV())
 in
-[ !KS_KEK(KS,kek,ckn), !MKA_Session(tid, ckn) ,
+[ 
+  !Member(tid, KS, Pae, cak, ckn, 'keyserver'),
+  !KS_KEK(KS,kek,ckn) , 
   !SAK_KS('keyserver',KS,sak_sk,%kn)
 ]
 --[ SAK_Wrapped(KS,tid,ckn,%kn) ]->
@@ -253,7 +252,7 @@ rule KS_Distribute_SAK:
       MKPDU_out = Build_SAK_Distribute(mi_ks, %mn_ks_1, lpl, sak_use, dist_sak, ick)
   in
   [  
-    !KS_ICK(KS,ick,ckn), !MKA_Session(tid, ckn) , !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ),
+    !KS_ICK(KS,ick,ckn), !Member(tid, KS, Pae, cak, ckn, 'keyserver') , !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ),
     SAK_Wrapped(KS, wsak, %kn, ckn), KS_Peer_Confirm(mi_p, %mn_p_0, tid),
     KS_1( 'KS_1', KS, tid, Pae , mi_ks , %mn_ks_1)
   ]
@@ -267,7 +266,7 @@ rule KS_Distribute_SAK:
 // Create TxSC and RxSC for KeyServer (SC's are unidirectional channels!!
 rule KeyServer_SecY_Configure:
 [
-    !MKA_Session(tid, ckn) , !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ),
+    !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ),
     KS_SecY_0( 'Create', KS, tid, KS_SecY ), KS_UpdateSecY( tid, 'keyserver', KS, KS_SecY, SCI_A , ckn )
 ]
 --[ KS_SecYConfig(tid, KS, KS_SecY ), OnlyOnce_KS_SC_Establish(),
@@ -281,7 +280,7 @@ rule KeyServer_SecY_Configure:
 /* Checking KeyServer for transmission */
 rule KeyServer_SecY_Enable:
 [
-    !MKA_Session(tid, ckn), !SAK_KS('keyserver',KS,sak_sk,%kn),
+    !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ), !SAK_KS('keyserver',KS,sak_sk,%kn),
     !KS_Tx_SC ( tid, 'keyserver', KS, KS_SecY, SCI_A ), 
     KS_SecY_1( 'SC_Init', KS, tid, KS_SecY )
 ]
@@ -301,7 +300,7 @@ let
     ICV = AES_GCM_tag(sak_sk, IV, AAD)
 in
 [
-   !MKA_Session(tid, ckn), !SAK_KS('keyserver',KS,sak_sk,%kn), 
+   !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ), !SAK_KS('keyserver',KS,sak_sk,%kn), 
    KS_TxSA( tid, 'keyserver', KS_SecY, sak_sk, SCI_A, 'AN0', %NextPN ),
    KS_SecY_2('SA_Ready', KS, tid, KS_SecY),
    KS_MACSec_Operational(tid, KS, 'keyserver', KS_SecY, %kn, 'AN0'),
@@ -326,8 +325,8 @@ rule Peer_Install_SAK:
       rcv_wsak = snd(snd(MKPDU_in))
   in
 [
-    !P_ICK(P,ick,ckn), !MKA_Session(tid, ckn) , !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B ),
-    P_1('P_1', P, tid, Pae, mi_p, %mn_p_1),
+    !P_ICK(P,ick,ckn), !Member(tid, P, Pae, cak, ckn, 'peer') , !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B ),
+    P_2('P_2', P, tid, Pae, mi_p, %mn_p_1),
     In( MKPDU_in ),
     KS_SAKDistributed(KS, ckn, tid, %kn)
 ]
@@ -335,7 +334,7 @@ rule Peer_Install_SAK:
     Eq(true, AES_CMAC_verify(snd(MKPDU_in),ick, fst(MKPDU_in), keylength())) , SAK_Install_Once(%kn)
 ]->
 [
-    P2('P_2', P, tid, Pae, mi_p, %mn_p_1 %+ %1),
+    P3('P_3', P, tid, Pae, mi_p, %mn_p_1 %+ %1),
     Out( MKPDU_out ),
     Rcv_SAK_Wrapped(P, rcv_wsak, %kn, ckn), P_UpdateSecY( tid, 'peer', P, P_SecY, SCI_B , ckn )
 ]
@@ -345,7 +344,7 @@ let
     sak_p = AES_KW_unwrap( rcv_wsak , kek, RFC3394_IV() )
 in
 [ 
-  !P_KEK(P,kek,ckn), !MKA_Session(tid, ckn) ,
+  !P_KEK(P,kek,ckn), !Member(tid, P, Pae, cak, ckn, 'peer') ,
   Rcv_SAK_Wrapped(P, rcv_wsak, %kn, ckn)
 ]
 --[ P_SAKUnwrapped(P, tid, ckn, %kn) ]->
@@ -356,33 +355,33 @@ in
 // Create TxSC and RxSC for Peer (SC's are unidirectional channels!!
 rule Peer_SecY_Configure:
 [
-    !MKA_Session(tid, ckn) , !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B ), !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ),
+    !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B ), !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ),
     P_SecY_0( 'Create', P, tid, P_SecY ), P_UpdateSecY( tid, 'peer', P, P_SecY, SCI_B , ckn )
 ]
---[ P_SecYConfig(tid, P, P_SecY ), OnlyOnce_P_SC_Establish(), P_RxSC_Create(tid, P, P_SecY, SCI_A )  
+--[ P_SecYConfig(tid, P, P_SecY ), P_RxSC_Create(tid, P, P_SecY, SCI_A )  
   ]->
 [
     !P_Rx_SC ( tid, 'peer', P, P_SecY, SCI_A ),
     P_SecY_1( 'SC_Init', P, tid, P_SecY )
 ]
 
+/* Checking KeyServer for transmission */
+rule Peer_SecY_Enable:
+[
+    !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B ), !SAK_P('peer', P, sak_p, %kn),
+    !P_Rx_SC ( tid, 'peer', P, P_SecY, SCI_A ), 
+    P_SecY_1( 'SC_Init', P, tid, P_SecY ),
+    TxSA_Estd( tid, 'keyserver', KS, KS_SecY)
+]
+--[ P_RxSA_Create(tid, P, P_SecY, SCI_A) ]->
+[
+   P_RxSA( tid, 'peer', P_SecY, sak_p, SCI_A, 'AN0', %1 ),
+   P_SecY_2( 'SA_Ready', P, tid, P_SecY ),
+   P_MACSec_Operational(tid, P, 'peer', P_SecY, %kn, 'AN0')
+]
+
 restriction OnlyOnce :
   " All #i #j. OnlyOnce() @i & OnlyOnce() @j ==> #i = #j "
-
-restriction OnlyOnce_CAKProvision :
-  " All #i #j. OnlyOnce_CAKProvision() @i & OnlyOnce_CAKProvision() @j ==> #i = #j "
-
-restriction OnlyOnce_KS_SecY_Provision :
-  " All #i #j. OnlyOnce_KS_SecY_Provision() @i & OnlyOnce_KS_SecY_Provision() @j ==> #i = #j "
-
-restriction OnlyOnce_P_SecY_Provision :
-  " All #i #j. OnlyOnce_P_SecY_Provision() @i & OnlyOnce_P_SecY_Provision() @j ==> #i = #j "
-
-restriction OnlyOnce_P_SC_Establish :
-  " All #i #j. OnlyOnce_P_SC_Establish() @i & OnlyOnce_P_SC_Establish() @j ==> #i = #j "
-
-restriction OnlyOnce_KS_SC_Establish :
-  " All #i #j. OnlyOnce_KS_SC_Establish() @i & OnlyOnce_KS_SC_Establish() @j ==> #i = #j "
 
 /* Ensure SAK Uniqueness with re-key */
 restriction SAK_Derive_Uniqueness:
@@ -408,9 +407,8 @@ lemma MN_P_strict_increase [use_induction, reuse]:
 lemma reachability:
   exists-trace
   " Ex ckn cak KS P Pae_A Pae_B tid mi_a mn_a mi_b mn_b kn KS_SecY P_SecY SCI_A SCI_B PN
-    #i1 #i2 #i3 #i4 #i5 #i6 #i7 #i8 #i9 #i10 #i11 #i12 #i13 #i14 #i15 #i16 #i17 #i18 #i19 #i20 #i21 #i22 #i24 #i27 #i28. 
+    #i1 #i3 #i4 #i5 #i6 #i7 #i8 #i9 #i10 #i11 #i12 #i13 #i14 #i15 #i16 #i17 #i18 #i19 #i20 #i21 #i22 #i24 #i27 #i28 #i29. 
     Generate_CAK(ckn,cak)@i1 &
-    OnlyOnce_CAKProvision()@i2 &
     OnlyOnce()@i3 &
     KS_Elected(KS, Pae_A, tid, ckn)@i4 &
     Peer_Created(P, Pae_B, tid, ckn)@i5 &
@@ -433,7 +431,8 @@ lemma reachability:
     KS_TxSC_Create(tid, KS, KS_SecY, SCI_A)@i22 &
     KS_TxSA_Create(tid, KS, KS_SecY, SCI_A)@i24 & 
     P_RxSC_Create(tid, P, P_SecY, SCI_A)@i27 &
-    KS_TxSA_Transmit(tid, KS, KS_SecY, SCI_A, PN )@i28
+    KS_TxSA_Transmit(tid, KS, KS_SecY, SCI_A, PN )@i28 &
+    P_RxSA_Create(tid, P, P_SecY, SCI_A)@i29
   "
   lemma MKA_Handshake_Orderliness:
   "All P tid ckn kn #i1.
@@ -463,6 +462,11 @@ lemma reachability:
   "All tid KS SecY SCI_A #i.
        KS_TxSA_Create(tid, KS, SecY, SCI_A)@i  ==> 
        (Ex #m. KS_TxSC_Create(tid, KS, SecY, SCI_A)@m & (#m < #i))
+  "
+  lemma Peer_SA_requirement:
+  "All tid P SecY SCI_A #i.
+       P_RxSA_Create(tid, P, SecY, SCI_A)@i  ==> 
+       (Ex #m. P_RxSC_Create(tid, P, SecY, SCI_A)@m & (#m < #i))
   "
 
 end 
