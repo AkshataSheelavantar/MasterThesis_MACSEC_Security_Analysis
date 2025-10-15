@@ -158,7 +158,6 @@ rule Bootstrap_KaY_KeyServer:
     !KS_ICK($KaY_A, kdf(cak, 'IEEE8021 ICK', ckn, '128'), ckn),
     !KS_KEK($KaY_A, kdf(cak, 'IEEE8021 KEK', ckn, '128'), ckn),
     KS_0('KS_0', $KaY_A, tid, $Pae_A , ~MI_A, %1),
-    KN_State($KaY_A, ckn, %1),
     KeyServer_Created(tid,ckn), KeyServer_SecYInitPending(tid,$KaY_A,ckn) ]
 
 /* Initialization rules 04 : Create Peer, Derive ICK and KEK */
@@ -245,13 +244,15 @@ in
   ]
 
 rule Derive_SAK:
-[ !Member(tid, KS, Pae, cak, ckn, 'keyserver'), Fr(~ks_n), KN_State(KS, ckn, %kn),
+let
+    %kn = %1
+in
+[ !Member(tid, KS, Pae, cak, ckn, 'keyserver'), Fr(~ks_n),
   KS_Peer_Reciprocal(KS, mi_ks, mi_p, %mn_p_1, tid, ckn),
 ]
---[ SAK_Derived(KS, ckn, tid, %kn)]->
+--[ SAK_Derived(KS, ckn, tid, %kn), SAK_Derive_Once(%kn) ]->
 [
   !SAK_KS('keyserver',KS, kdf(cak, 'IEEE8021 SAK', SAK_ctx(~ks_n, < mi_ks, mi_p >, %kn), '128'), %kn),
-  KN_State(KS, ckn, %kn %+ %1 ),
   KS_Peer_Confirm(mi_p, %mn_p_1, tid)
 ]
 
@@ -281,10 +282,10 @@ rule KS_Distribute_SAK:
     SAK_Wrapped(KS, wsak, %kn, ckn), KS_Peer_Confirm(mi_p, %mn_p_1, tid),
     KS_1( 'KS_1', KS, tid, Pae , mi_ks , %mn_ks_2)
   ]
-  --[ MKPDU_KS_SAKDistributed(KS, ckn, tid, %kn), MN_State_KS(KS,tid,ckn,%mn_ks_2 %+ %1) , SAK_Derive_Once(%kn)]->
+  --[ MKPDU_KS_SAKDistributed(KS, ckn, tid, %kn), MN_State_KS(KS,tid,ckn,%mn_ks_2 %+ %1)]->
   [ 
     Out( MKPDU_out ),
-    KS_2( 'KS_2', KS, tid, Pae , mi_ks , %mn_ks_2 %+ %1, mi_p, %mn_p_1 ),
+    KS_2( 'KS_2', KS, tid, Pae , mi_ks , %mn_ks_2 %+ %1, mi_p, %mn_p_1 , %kn),
     KS_SAKDistributed(KS, ckn, tid, %kn)
   ]
 
@@ -337,12 +338,12 @@ let
 in
 [
     !KS_ICK(KS,ick,ckn), !Member(tid, KS, Pae, cak, ckn, 'keyserver'), !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ),
-    KS_2( 'KS_2', KS, tid, Pae , mi_ks , %mn_ks_3 , mi_p, %mn_p_1 ),
+    KS_2( 'KS_2', KS, tid, Pae , mi_ks , %mn_ks_3 , mi_p, %mn_p_1, %kn ),
     In( MKPDU_in )
 ]
 --[ MKA_Handshake_Complete(tid,ckn), _restrict( GEQ(%mn_p_2, %1 %+ %1 ))]->
 [
-    KS_3( 'KS_3', KS, tid, Pae , mi_ks , %mn_ks_3 , mi_p, %mn_p_2 ), 
+    KS_3( 'KS_3', KS, tid, Pae , mi_ks , %mn_ks_3 , mi_p, %mn_p_2, %kn ), 
     KS_UpdateSecY( tid, 'keyserver', KS, KS_SecY, SCI_A , ckn )
 ]
 
@@ -469,14 +470,14 @@ let
 in
 [
     !KS_ICK(KS,ick,ckn), !Member(tid, KS, Pae, cak, ckn, 'keyserver'),
-    KS_3( 'KS_3', KS, tid, Pae , mi_ks , %mn_ks_3 , mi_p, %mn_p_2 ),
+    KS_3( 'KS_3', KS, tid, Pae , mi_ks , %mn_ks_3 , mi_p, %mn_p_2, %kn ),
     KS_MKA_Hello_Timeout(tid, KS, 'Stop')
 
 ]
 --[ KS_Liveliness_Confirm(tid,ckn)]->
 [
     Out( MKPDU_out ),
-    KS_4( 'KS_4', KS, tid, Pae , mi_ks , %mn_ks_3 %+ %1 , mi_p, %mn_p_2 )
+    KS_4( 'KS_4', KS, tid, Pae , mi_ks , %mn_ks_3 %+ %1 , mi_p, %mn_p_2, %kn )
 ]
 
 rule Peer_Liveliness_Confirm :
@@ -494,12 +495,71 @@ in
     P_2('P_2', P, tid, Pae, mi_p, %mn_p_3, mi_ks, %mn_ks_2),
     In(MKPDU_in)
 ]
---[ P_Liveliness_Confirm(tid,ckn), _restrict( GEQ(%mn_ks_3,%1 %+ %1 %+ %1))]->
+--[ P_Liveliness_Confirm(tid,ckn), _restrict( GEQ(%mn_ks_3,%1 %+ %1 %+ %1)), Eq(true, AES_CMAC_verify(snd(MKPDU_in),ick, fst(MKPDU_in), keylength())) ]->
 [
     Out( MKPDU_out ),
-    P_2('P_2', P, tid, Pae, mi_p, %mn_p_3 %+ %1, mi_ks, %mn_ks_3),
+    P_3('P_3', P, tid, Pae, mi_p, %mn_p_3 %+ %1, mi_ks, %mn_ks_3),
     Trigger_PN_exhaust(tid, ckn)
 ]
+
+rule KS_PN_Exhaustion_Detect:
+[ 
+  Trigger_PN_exhaust(tid, ckn)
+]
+--[ KS_PN_Exhaust_Trigger(tid,'AN0') ]->
+[ 
+  Rekey_Request(tid,'AN0') 
+]
+
+rule KS_Derive_SAK_Rekey:
+let
+      lpl = LPL_Param(<mi_ks, %mn_ks_3>)
+      sak_use = SAKUse('AN0',true,true)      
+      MKPDU_in = Build_Peer_LivelinessConfirm(mi_p,%mn_p_3, lpl, sak_use, ick)
+in
+[
+  !Member(tid, KS, Pae, cak, ckn, 'keyserver'), !KS_ICK(KS,ick,ckn),
+  In(MKPDU_in), Rekey_Request(tid,'AN0'), Fr(~ks_n_rekey),
+  KS_4( 'KS_4', KS, tid, Pae , mi_ks , %mn_ks_4 , mi_p, %mn_p_2, %kn )
+]
+--[ SAK_RekeyDerived(KS, ckn, tid, %kn %+ %1), Eq(true, AES_CMAC_verify(snd(MKPDU_in),ick, fst(MKPDU_in), keylength())) ]->
+[
+  SAK_KS_new('keyserver',KS, kdf(cak, 'IEEE8021 SAK', SAK_ctx(~ks_n_rekey, < mi_ks, mi_p >, %kn %+ %1), '128'), %kn %+ %1),
+  KS_5( 'KS_5', KS, tid, Pae , mi_ks , %mn_ks_4 , mi_p, %mn_p_3, %kn %+ %1)
+]
+
+rule KS_Prepare_SAK_Rekey:
+let
+    wsak_rekey = AES_KW_wrap(sak_sk_rekey, kek, RFC3394_IV())
+in
+[
+  !Member(tid, KS, Pae, cak, ckn, 'keyserver'),
+  !KS_KEK(KS,kek,ckn) , 
+  SAK_KS_new('keyserver',KS,sak_sk_rekey,%kn_new)
+]
+--[ SAK_Rekey_Available(KS,tid,ckn,%kn_new), SAK_Derive_Once(%kn_new)]->
+[
+  SAK_Rekey_Wrapped(KS,wsak_rekey,%kn_new,ckn)
+]
+
+rule KS_Distribute_SAK_Rekey:
+  let
+      lpl      = LPL_Param(< mi_p, %mn_p_3 >)
+      sak_use  = SAKUse('AN1', true, true)
+      dist_sak = DistSAK('AN1', %kn_new, wsak_rekey)
+      MKPDU_out = Build_SAK_Distribute(mi_ks, %mn_ks_4, lpl, sak_use, dist_sak, ick)
+  in
+  [  
+    !KS_ICK(KS,ick,ckn), !Member(tid, KS, Pae, cak, ckn, 'keyserver') ,
+    SAK_Rekey_Wrapped(KS, wsak_rekey, %kn_new, ckn), 
+    KS_5( 'KS_5', KS, tid, Pae , mi_ks , %mn_ks_4 , mi_p, %mn_p_3, %kn_new)
+  ]
+  --[ MKPDU_KS_SAKReKey_Distributed(KS, ckn, tid, %kn_new), MN_State_KS(KS,tid,ckn,%mn_ks_4 %+ %1) ]->
+  [ 
+    Out( MKPDU_out ),
+    KS_6( 'KS_6', KS, tid, Pae , mi_ks , %mn_ks_4 %+ %1 , mi_p, %mn_p_3, %kn_new),
+    KS_SAKRekeyDistributed(KS, ckn, tid, %kn_new)
+  ]
 
 restriction OnlyOnce :
   " All #i #j. OnlyOnce() @i & OnlyOnce() @j ==> #i = #j "
@@ -514,9 +574,6 @@ restriction SAK_Derive_Uniqueness:
 restriction SAK_Install_Uniqueness:
 "All kn #i #j. SAK_Install_Once(kn)@i & SAK_Install_Once(kn)@j ==> #i = #j"
 
-restriction equality:
-  "All x y #i. Eq(x, y) @ i ==> x = y"
-
 lemma MN_KS_strict_increase [use_induction, reuse]:
    "All KS tid ckn %mn1 %mn2 #i #j.
     ( MN_State_KS(KS,tid,ckn,%mn1)@i & MN_State_KS(KS,tid,ckn,%mn2)@j & #i < #j )
@@ -530,8 +587,9 @@ lemma MN_P_strict_increase [use_induction, reuse]:
 
 lemma reachability:
   exists-trace
-  " Ex ckn cak KS P Pae_A Pae_B tid mi_a mn_a mi_b mn_b an kn KS_SecY P_SecY SCI_A SCI_B PN
-    #i1 #i4 #i5 #i6 #i7 #i8 #i9 #i10 #i11 #i12 #i13 #i14 #i15 #i16 #i17 #i21 #i22 #i23 #i24 #i25 #i26 #i27 #i28 #i29 #i30 #i31 #i32 #i33 #i34 #i35 #i36 #i37. 
+  " Ex ckn cak KS P Pae_A Pae_B tid mi_a mn_a mi_b mn_b an kn KS_SecY P_SecY SCI_A SCI_B PN kn_rekey
+    #i1 #i4 #i5 #i6 #i7 #i8 #i9 #i10 #i11 #i12 #i13 #i14 #i15 #i16 #i17 #i21 #i22 #i23 #i24 #i25 #i26 
+    #i27 #i28 #i29 #i30 #i31 #i32 #i33 #i34 #i35 #i36 #i37 #i38 #i39 #i40 #i41. 
     Generate_CAK(ckn,cak)@i1 &
     KS_Elected(KS, Pae_A, tid, ckn)@i4 &
     Peer_Created(P, Pae_B, tid, ckn)@i5 &
@@ -563,9 +621,12 @@ lemma reachability:
     KS_MKA_TimeStart(tid, KS)@i36 &
     KS_MKA_Timeout(tid, KS )@i37 &
     KS_Liveliness_Confirm(tid,ckn)@i34 &
-    P_Liveliness_Confirm(tid,ckn)@i35
+    P_Liveliness_Confirm(tid,ckn)@i35 &
+    KS_PN_Exhaust_Trigger(tid, an)@i38 &
+    SAK_RekeyDerived(KS, ckn, tid, kn_rekey)@i39 &
+    SAK_Rekey_Available(KS,tid,ckn, kn_rekey)@i40 &
+    MKPDU_KS_SAKReKey_Distributed(KS, ckn, tid, kn_rekey)@i41
   "
-  
   lemma Peer_Precedency:
   "All P Pae_B tid ckn #i. Peer_Created(P, Pae_B, tid, ckn)@i ==> 
      (Ex KS Pae_A #j. KS_Elected(KS, Pae_A, tid, ckn)@j & #j < #i )"
