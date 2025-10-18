@@ -141,7 +141,7 @@ macros:
 rule CAK_Provision:
   [ Fr(~cak), Fr(~ckn) , Fr(~tid) ]
   --[ Generate_CAK(~ckn, ~cak), OnlyOnce_CAKProvision() ]->
-  [ CAK(~cak, ~ckn), MKA_Session(~tid, ~ckn) ]
+  [ CAK(~cak, ~ckn), MKA_Session(~tid, ~ckn), CAK_Reveal_Token(~tid,~cak,~ckn) ]
 
 
 /* Initialization rules 02 : Role creation to be allocated to the respective KaYs */
@@ -190,6 +190,18 @@ rule Bootstrap_SecY_Peer:
      !Peer_SecYCreated(tid, 'peer', P, $SecY_B, ~SCI_B ),
      P_SecY_0( 'Create', P, tid, $SecY_B )
   ]
+
+/* Attacker-based rules */
+
+rule CAK_compromise:
+[
+  CAK_Reveal_Token(tid,cak,ckn)
+]
+--[ RevealCAK(ckn) ]->
+[
+  Out(cak), Out(ckn)
+]
+
 /* ---------------------------------------------------------------------MKPDU transmission and Reception ----------------------------------------------------------------------------------------*/
 
 /* Key Server MKA Hello  */
@@ -265,9 +277,9 @@ in
   !KS_KEK(KS,kek,ckn) , 
   !SAK_KS('keyserver',KS,sak_sk,%kn)
 ]
---[ SAK_Wrapped(KS,tid,ckn,%kn) ]->
+--[ KS_SAK_Wrapped(KS,tid,ckn, sak_sk, %kn) ]->
 [
-  SAK_Wrapped(KS,wsak,%kn,ckn)
+  SAK_Wrapped(KS,wsak,%kn,ckn), SAK_Reveal_Token(tid, sak_sk, %kn)
 ]
 
 rule KS_Distribute_SAK:
@@ -561,6 +573,15 @@ rule KS_Distribute_SAK_Rekey:
     KS_SAKRekeyDistributed(KS, ckn, tid, %kn_new)
   ]
 
+rule SAK_Compromise:
+[
+  SAK_Reveal_Token(tid, sak_sk, %kn)
+]
+--[ RevealSAK(%kn) ]->
+[
+  Out(sak_sk)
+]
+
 restriction OnlyOnce :
   " All #i #j. OnlyOnce() @i & OnlyOnce() @j ==> #i = #j "
 
@@ -587,7 +608,7 @@ lemma MN_P_strict_increase [use_induction, reuse]:
 
 lemma reachability:
   exists-trace
-  " Ex ckn cak KS P Pae_A Pae_B tid mi_a mn_a mi_b mn_b an kn KS_SecY P_SecY SCI_A SCI_B PN kn_rekey
+  " Ex ckn cak KS P Pae_A Pae_B tid mi_a mn_a mi_b mn_b an kn KS_SecY P_SecY SCI_A SCI_B PN kn_rekey sak_sk
     #i1 #i4 #i5 #i6 #i7 #i8 #i9 #i10 #i11 #i12 #i13 #i14 #i15 #i16 #i17 #i21 #i22 #i23 #i24 #i25 #i26 
     #i27 #i28 #i29 #i30 #i31 #i32 #i33 #i34 #i35 #i36 #i37 #i38 #i39 #i40 #i41. 
     Generate_CAK(ckn,cak)@i1 &
@@ -601,7 +622,7 @@ lemma reachability:
     MKPDU_Peer_Hello(P,mi_b,mn_b, tid,ckn)@i11 &
     KS_Saw_Self_In_PPL(KS, mi_a, mn_a, tid, ckn)@i12 &
     SAK_Derived(KS, ckn, tid, kn)@i13 &
-    SAK_Wrapped(KS,tid,ckn, kn)@i14 &
+    KS_SAK_Wrapped(KS,tid,ckn, sak_sk, kn)@i14 &
     MKPDU_KS_SAKDistributed(KS, ckn, tid, kn)@i15 &
     MKPDU_Peer_SAKInstalled(P,ckn,tid,kn)@i16 &
     MKA_Handshake_Complete(tid,ckn)@i17 &
@@ -657,11 +678,58 @@ lemma reachability:
    )
 
   "
-  lemma Valid_MKA_Liveliness_Confirm:
+  lemma MKA_Handshake_Orderliness:
+  "All P tid ckn kn #i1.
+     MKPDU_Peer_SAKInstalled(P, ckn, tid, kn) @ #i1 ==>
+     ( Ex KS mi_b mn_b mi_a mn_a #i2 #i3 #i4.
+         MKPDU_KS_SAKDistributed(KS, ckn, tid, kn) @ #i2 &
+         MKPDU_Peer_Hello(P, mi_b, mn_b, tid, ckn)   @ #i3 &
+         MKPDU_KS_MKAHello(KS, mi_a, mn_a, tid, ckn) @ #i4 &
+         ( #i4 < #i3 ) &
+         ( #i3 < #i2 ) &
+         ( #i2 < #i1 )
+     )"
+
+lemma Valid_MKA_Liveliness_Confirm:
    "All tid ckn #i #j. KS_Liveliness_Confirm(tid,ckn)@i & P_Liveliness_Confirm(tid,ckn)@j ==>
     Ex KS #k. KS_MKA_Timeout(tid, KS)@k & 
     (#k < #i) &
     (#k < #j)
    "
 
-end 
+lemma secrecy_cak [reuse]:
+  "All cak ckn #i.
+     Generate_CAK(ckn,cak)@i
+     & not(Ex #j. RevealCAK(ckn)@j)
+   ==> not(Ex #k. K(cak)@k)" 
+
+lemma secrecy_ick:
+  "All cak ckn #i.
+     Generate_CAK(ckn,cak)@i
+     & not(Ex #j. RevealCAK(ckn)@j)
+   ==> not(Ex #m. K(kdf(cak,'IEEE8021 ICK', ckn, '128'))@m)"
+
+lemma secrecy_kek:
+  "All cak ckn #i.
+     Generate_CAK(ckn,cak)@i
+     & not(Ex #j. RevealCAK(ckn)@j)
+   ==> not(Ex #m. K(kdf(cak,'IEEE8021 KEK', ckn, '128'))@m)"
+
+lemma secrecy_sak:
+  "All KS tid ckn kn sak #i.
+     KS_SAK_Wrapped(KS,tid,ckn, sak, kn)@i
+   & not(Ex ckn #r. RevealCAK(ckn)@r)
+   & not(Ex kn #s. RevealSAK(kn)@s)
+   ==> not(Ex #k. K(sak)@k)"
+
+lemma inj_agreement_peer_on_ks_initial:
+  "All P0 tid ckn kn #p_1.
+     MKPDU_Peer_SAKInstalled(P0, ckn, tid, kn)@p_1 
+     & not (Ex #r. RevealCAK(ckn)@r)
+     ==> 
+     (Ex KS #ks. MKPDU_KS_SAKDistributed(KS, ckn, tid, kn)@ks & (#ks < #p_1) 
+     & not(Ex P1 #p_2. MKPDU_Peer_SAKInstalled(P1, ckn, tid, kn)@p_2 & not(#p_1 = #p_2))
+     )
+  "
+
+end "
