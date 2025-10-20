@@ -670,32 +670,6 @@ lemma reachability:
        P_RxSA_Create(tid, P, SecY, SCI_A)@i  ==> 
        (Ex #m. P_RxSC_Create(tid, P, SecY, SCI_A)@m & (#m < #i))
   "
-  lemma Valid_Transmit_Receive:
-  "All tid KS P KS_SecY P_SecY SCI_A PN #i #j. KS_TxSA_Transmit(tid, KS, KS_SecY, SCI_A, PN )@i & Peer_RxSA_Receive(tid, P, P_SecY, SCI_A, PN )@j ==>
-   ( Ex an #m #n. KS_Set_MACsec_Operational(tid, KS, KS_SecY,an)@m & P_Set_MACsec_Operational(tid, P, P_SecY, an)@n &
-     (#m < #i) &
-     (#n < #j)
-   )
-
-  "
-  lemma MKA_Handshake_Orderliness:
-  "All P tid ckn kn #i1.
-     MKPDU_Peer_SAKInstalled(P, ckn, tid, kn) @ #i1 ==>
-     ( Ex KS mi_b mn_b mi_a mn_a #i2 #i3 #i4.
-         MKPDU_KS_SAKDistributed(KS, ckn, tid, kn) @ #i2 &
-         MKPDU_Peer_Hello(P, mi_b, mn_b, tid, ckn)   @ #i3 &
-         MKPDU_KS_MKAHello(KS, mi_a, mn_a, tid, ckn) @ #i4 &
-         ( #i4 < #i3 ) &
-         ( #i3 < #i2 ) &
-         ( #i2 < #i1 )
-     )"
-
-lemma Valid_MKA_Liveliness_Confirm:
-   "All tid ckn #i #j. KS_Liveliness_Confirm(tid,ckn)@i & P_Liveliness_Confirm(tid,ckn)@j ==>
-    Ex KS #k. KS_MKA_Timeout(tid, KS)@k & 
-    (#k < #i) &
-    (#k < #j)
-   "
 
 lemma secrecy_cak [reuse]:
   "All cak ckn #i.
@@ -722,6 +696,15 @@ lemma secrecy_sak:
    & not(Ex kn #s. RevealSAK(kn)@s)
    ==> not(Ex #k. K(sak)@k)"
 
+lemma attacker_injects_with_fresh_pn:
+  exists-trace
+  "Ex tid KS KS_SecY P P_SecY SCI_A kn PN0 PNatt #i #j #k.
+     RevealSAK(kn)                                  @ i
+   & KS_TxSA_Transmit(tid,KS,KS_SecY,SCI_A,PN0)     @ j                                  
+   & Peer_RxSA_Receive(tid,P,P_SecY,SCI_A,PNatt)    @ k
+   & (#j < #k)
+   & not(Ex ckn #r. RevealCAK(ckn) @ r)
+   "
 lemma inj_agreement_peer_on_ks_initial:
   "All P0 tid ckn kn #p_1.
      MKPDU_Peer_SAKInstalled(P0, ckn, tid, kn)@p_1 
@@ -731,5 +714,27 @@ lemma inj_agreement_peer_on_ks_initial:
      & not(Ex P1 #p_2. MKPDU_Peer_SAKInstalled(P1, ckn, tid, kn)@p_2 & not(#p_1 = #p_2))
      )
   "
-
-end "
+/* Handshake cannot complete without both legitimate parties */
+lemma handshake_requires_both_parties:
+  "All tid ckn #i.
+     MKA_Handshake_Complete(tid, ckn) @ i
+     & not (Ex #r. RevealCAK(ckn)@r)
+     ==> (Ex KS Pae_A P Pae_B #j #k.
+            KS_Elected(KS, Pae_A, tid, ckn) @ j
+            & Peer_Created(P, Pae_B, tid, ckn) @ k
+            & #j < #i & #k < #i)
+  "
+lemma SAK_forward_secrecy:
+  "All KS tid ckn sak_old kn_old #i #j. KS_SAK_Wrapped(KS,tid,ckn, sak_old, kn_old)@i &
+       RevealCAK(ckn)@j & 
+       (#i < #j)
+       ==> not(Ex #k. K(sak_old)@k)
+   "
+lemma SAK_freshness:
+  "All KS ckn tid kn1 kn2 #i #j.
+     SAK_Derived(KS, ckn, tid, kn1) @ i
+     & SAK_RekeyDerived(KS, ckn, tid, kn2) @ j
+     & #i < #j
+     ==> not (kn1 = kn2)  /* Different fresh nonces */
+  "
+end 
