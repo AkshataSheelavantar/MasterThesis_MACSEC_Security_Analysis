@@ -549,7 +549,7 @@ in
   !KS_KEK(KS,kek,ckn) , 
   SAK_KS_new('keyserver',KS,sak_sk_rekey,%kn_new)
 ]
---[ SAK_Rekey_Available(KS,tid,ckn,%kn_new), SAK_Derive_Once(%kn_new)]->
+--[ KS_SAKRekey_Wrapped(KS,tid,ckn,sak_sk_rekey,%kn_new), SAK_Derive_Once(%kn_new)]->
 [
   SAK_Rekey_Wrapped(KS,wsak_rekey,%kn_new,ckn)
 ]
@@ -608,7 +608,7 @@ lemma MN_P_strict_increase [use_induction, reuse]:
 
 lemma reachability:
   exists-trace
-  " Ex ckn cak KS P Pae_A Pae_B tid mi_a mn_a mi_b mn_b an kn KS_SecY P_SecY SCI_A SCI_B PN kn_rekey sak_sk
+  " Ex ckn cak KS P Pae_A Pae_B tid mi_a mn_a mi_b mn_b an kn KS_SecY P_SecY SCI_A SCI_B PN kn_rekey sak_sk sak_sk_new
     #i1 #i4 #i5 #i6 #i7 #i8 #i9 #i10 #i11 #i12 #i13 #i14 #i15 #i16 #i17 #i21 #i22 #i23 #i24 #i25 #i26 
     #i27 #i28 #i29 #i30 #i31 #i32 #i33 #i34 #i35 #i36 #i37 #i38 #i39 #i40 #i41. 
     Generate_CAK(ckn,cak)@i1 &
@@ -645,7 +645,7 @@ lemma reachability:
     P_Liveliness_Confirm(tid,ckn)@i35 &
     KS_PN_Exhaust_Trigger(tid, an)@i38 &
     SAK_RekeyDerived(KS, ckn, tid, kn_rekey)@i39 &
-    SAK_Rekey_Available(KS,tid,ckn, kn_rekey)@i40 &
+    KS_SAKRekey_Wrapped(KS,tid,ckn, sak_sk_new,kn_rekey)@i40 &
     MKPDU_KS_SAKReKey_Distributed(KS, ckn, tid, kn_rekey)@i41
   "
   lemma Peer_Precedency:
@@ -670,7 +670,6 @@ lemma reachability:
        P_RxSA_Create(tid, P, SecY, SCI_A)@i  ==> 
        (Ex #m. P_RxSC_Create(tid, P, SecY, SCI_A)@m & (#m < #i))
   "
-
 lemma secrecy_cak [reuse]:
   "All cak ckn #i.
      Generate_CAK(ckn,cak)@i
@@ -696,34 +695,6 @@ lemma secrecy_sak:
    & not(Ex kn #s. RevealSAK(kn)@s)
    ==> not(Ex #k. K(sak)@k)"
 
-lemma attacker_injects_with_fresh_pn:
-  exists-trace
-  "Ex tid KS KS_SecY P P_SecY SCI_A kn PN0 PNatt #i #j #k.
-     RevealSAK(kn)                                  @ i
-   & KS_TxSA_Transmit(tid,KS,KS_SecY,SCI_A,PN0)     @ j                                  
-   & Peer_RxSA_Receive(tid,P,P_SecY,SCI_A,PNatt)    @ k
-   & (#j < #k)
-   & not(Ex ckn #r. RevealCAK(ckn) @ r)
-   "
-lemma inj_agreement_peer_on_ks_initial:
-  "All P0 tid ckn kn #p_1.
-     MKPDU_Peer_SAKInstalled(P0, ckn, tid, kn)@p_1 
-     & not (Ex #r. RevealCAK(ckn)@r)
-     ==> 
-     (Ex KS #ks. MKPDU_KS_SAKDistributed(KS, ckn, tid, kn)@ks & (#ks < #p_1) 
-     & not(Ex P1 #p_2. MKPDU_Peer_SAKInstalled(P1, ckn, tid, kn)@p_2 & not(#p_1 = #p_2))
-     )
-  "
-/* Handshake cannot complete without both legitimate parties */
-lemma handshake_requires_both_parties:
-  "All tid ckn #i.
-     MKA_Handshake_Complete(tid, ckn) @ i
-     & not (Ex #r. RevealCAK(ckn)@r)
-     ==> (Ex KS Pae_A P Pae_B #j #k.
-            KS_Elected(KS, Pae_A, tid, ckn) @ j
-            & Peer_Created(P, Pae_B, tid, ckn) @ k
-            & #j < #i & #k < #i)
-  "
 lemma SAK_forward_secrecy:
   "All KS tid ckn sak_old kn_old #i #j. KS_SAK_Wrapped(KS,tid,ckn, sak_old, kn_old)@i &
        RevealCAK(ckn)@j & 
@@ -735,6 +706,43 @@ lemma SAK_freshness:
      SAK_Derived(KS, ckn, tid, kn1) @ i
      & SAK_RekeyDerived(KS, ckn, tid, kn2) @ j
      & #i < #j
-     ==> not (kn1 = kn2)  /* Different fresh nonces */
+     ==> not (kn1 = kn2) 
   "
+lemma macsec_frame_integrity:
+  "All tid P P_SecY SCI_A PN #i.
+     Peer_RxSA_Receive(tid, P, P_SecY, SCI_A, PN) @ i
+     ==> (Ex KS KS_SecY #j.
+            KS_TxSA_Transmit(tid, KS, KS_SecY, SCI_A, PN) @ j
+            & #j < #i)
+         | (Ex kn #r. RevealSAK(kn) @ r)
+  "
+
+lemma key_confirmation_agreement:
+  "All P tid ckn kn #i #j.
+     MKPDU_Peer_SAKInstalled(P, ckn, tid, kn) @ i
+     & MKA_Handshake_Complete(tid, ckn) @ j
+     & not(Ex #r. RevealCAK(ckn)@r)
+     & #i < #j
+     ==> (Ex KS #k. MKPDU_KS_SAKDistributed(KS, ckn, tid, kn) @ k
+            & #k < #i)
+  "
+/* Handshake cannot complete without both legitimate parties */
+lemma handshake_requires_both_parties:
+  "All tid ckn #i.
+     MKA_Handshake_Complete(tid, ckn) @ i
+     & not (Ex #r. RevealCAK(ckn)@r)
+     ==> (Ex KS Pae_A P Pae_B #j #k.
+            KS_Elected(KS, Pae_A, tid, ckn) @ j
+            & Peer_Created(P, Pae_B, tid, ckn) @ k
+            & #j < #i & #k < #i)
+  "
+lemma post_compromise_security:
+  "All KS ckn tid sak_old sak_new kn_old kn_new #i #j #r.
+     KS_SAK_Wrapped(KS,tid,ckn, sak_old, kn_old) @ i
+     & RevealSAK(kn_old) @ r
+     & KS_SAKRekey_Wrapped(KS,tid,ckn,sak_new,kn_new) @ j
+     & (#i < #r) & (#r < #j)
+     ==> not (Ex #k. K(sak_new) @ k) | (Ex #m. RevealCAK(ckn)@m)
+  "
+
 end 
