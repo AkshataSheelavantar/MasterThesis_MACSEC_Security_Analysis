@@ -40,13 +40,32 @@ SA/0,
 AES_KW_wrap/3, 
 AES_KW_unwrap/3, 
 RFC3394_IV/0,
+PN_MAX/0,
 AES_GCM_tag/3, 
-AES_GCM_verify/4,
-PN_MAX/0
+AES_GCM_verify/4
+
+#ifdef GCM_CI
+functions:
+AES_GCM_senc/4, 
+AES_GCM_sdecv/4,
+AES_GCM_tag/3
+equations: AES_GCM_sdecv(K, IV, AES_GCM_senc(K, IV, P, AAD), AAD) = true
+
+#endif
+
+#ifdef GCM_IO
+functions:
+AES_GCM_tag/3, 
+AES_GCM_verify/4
+equations : AES_GCM_verify(K, IV, AES_GCM_tag(K, IV, AAD), AAD) = true
+
+#endif
+
 
 equations: AES_CMAC_verify( AES_CMAC_auth(ICK, M, keylength()), ICK, M, keylength() ) = true ,
-           AES_KW_unwrap( AES_KW_wrap(M, KEK, RFC3394_IV()), KEK, RFC3394_IV() ) = M ,
-           AES_GCM_verify(K, IV, AES_GCM_tag(K, IV, AAD), AAD) = true
+           AES_KW_unwrap( AES_KW_wrap(M, KEK, RFC3394_IV()), KEK, RFC3394_IV() ) = M 
+           //AES_GCM_verify(K, IV, AES_GCM_tag(K, IV, AAD), AAD) = true
+
 
 /****************************************************
  * MKA MKPDU — Structuring Prototype (Macros-Only)
@@ -123,6 +142,8 @@ macros:
 
 
   /* ---- MACsec Frame Structure ---- */
+#ifdef GCM_IO
+macros:
   MPDU_SecTag(an, pn, sci) = < 'SECTAG', '88E5', an, pn, sci >,
   MPDU_IV(sci, pn)         = < sci, pn >,
   MPDU_AAD(sectag, payload)      = < DA(), SA(), sectag, payload >,
@@ -132,7 +153,21 @@ macros:
   Build_MACsec_Frame(sci, an, pn, sak, payload) = MPDU_MACSEC( MPDU_SecTag(an, pn, sci), 
         payload,
         AES_GCM_tag(sak, MPDU_IV(sci, pn), MPDU_AAD(MPDU_SecTag(an, pn, sci), payload)))
+  #endif
 
+        /* -------------------------------------------------- */
+  #ifdef GCM_CI
+  macros:
+  MPDU_SecTag(an, pn, sci) = < 'SECTAG', '88E5', an, pn, sci >,
+  MPDU_IV(sci, pn)         = < sci, pn >,
+  MPDU_AAD(sectag)      = < DA(), SA(), sectag>,
+  MPDU_MACSEC(sectag,payload, icv) = < <'MACSEC', sectag, payload >, icv >,
+
+  /* Full frame (integrity-only; payload is visible) */
+  Build_MACsec_Frame(sci, an, pn, sak, payload) = MPDU_MACSEC( MPDU_SecTag(an, pn, sci), 
+        AES_GCM_senc(sak, MPDU_IV(sci,pn), payload, MPDU_AAD(MPDU_SecTag(an, pn, sci))),
+        AES_GCM_tag(sak, MPDU_IV(sci, pn), MPDU_AAD(MPDU_SecTag(an, pn, sci))) )
+  #endif
 /****************************************************
  * Protocol rule definition
 ****************************************************/
@@ -239,6 +274,7 @@ rule Peer_MKA_HelloAck:
     P_1('P_1', P, tid, Pae, mi_p, %mn_p_1 %+ %1, mi_ks, %mn_ks_1 )
   ]
 
+
 rule KS_Recv_Peer_Hello:
 let  
     ppl = PPL_Param(<mi_ks , %mn_ks_1>)
@@ -318,9 +354,9 @@ rule Peer_Install_SAK:
     In( MKPDU_in ),
     KS_SAKDistributed(KS, ckn, tid, %kn)
 ]
---[ MKPDU_Peer_SAKInstalled(P,ckn,tid, %kn), MN_State_P(P,tid,ckn,%mn_p_2 %+ %1) , _restrict( GEQ(%mn_ks_2, %1 %+ %1 )),
+--[ MKPDU_Peer_SAKInstalled(P,ckn,tid, %kn), MN_State_P(P,tid,ckn,%mn_p_2 %+ %1) , _restrict( GEQ(%mn_ks_2, %mn_ks_1 %+ %1 )),
     Eq(true, AES_CMAC_verify(snd(MKPDU_in),ick, fst(MKPDU_in), keylength())),
-    SAK_Install_Once(%kn)
+    SAK_Install_Once(tid,%kn)
 ]->
 [
     P_2('P_2', P, tid, Pae, mi_p, %mn_p_2 %+ %1, mi_ks, %mn_ks_2),
@@ -353,7 +389,7 @@ in
     KS_2( 'KS_2', KS, tid, Pae , mi_ks , %mn_ks_3 , mi_p, %mn_p_1, %kn ),
     In( MKPDU_in )
 ]
---[ MKA_Handshake_Complete(tid,ckn), _restrict( GEQ(%mn_p_2, %1 %+ %1 ))]->
+--[ MKA_Handshake_Complete(tid,ckn), _restrict( GEQ(%mn_p_2, %mn_p_1 %+ %1 ))]->
 [
     KS_3( 'KS_3', KS, tid, Pae , mi_ks , %mn_ks_3 , mi_p, %mn_p_2, %kn ), 
     KS_UpdateSecY( tid, 'keyserver', KS, KS_SecY, SCI_A , ckn )
@@ -416,6 +452,7 @@ rule Peer_SecY_Enable:
    P_MACSec_Operational(tid, P, 'peer', P_SecY, %kn, 'AN0')
 ]
 
+#ifdef GCM_IO
 rule KeyServer_Transmit:
 let 
   %NextPN = %PN
@@ -455,6 +492,51 @@ in
    P_RxSA( tid, 'peer', P_SecY, sak_p, SCI_A, 'AN0', %LowestPN %+ %1 ),
    P_SecY_3( 'SA_Receive', P , tid, P_SecY )
 ]
+
+#endif
+
+#ifdef GCM_CI
+rule KeyServer_Transmit:
+let 
+  %NextPN = %PN
+  MPDU_out = Build_MACsec_Frame(SCI_A, 'AN0', %PN, sak_sk, ~payload)
+in
+[ !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ),
+  !SAK_KS('keyserver',KS,sak_sk,%kn), 
+  KS_TxSA( tid, 'keyserver', KS_SecY, sak_sk, SCI_A, 'AN0', %NextPN ),
+  KS_SecY_2('SA_Ready', KS, tid, KS_SecY),
+  KS_MACSec_Operational(tid, KS, 'keyserver', KS_SecY, %kn, 'AN0'),
+  Fr(~payload)
+]
+--[ KS_TxSA_Transmit(tid, KS, KS_SecY, SCI_A, %NextPN ) ]->
+[ 
+  Out( MPDU_out ),
+  KS_TxSA( tid, 'keyserver', KS_SecY, sak_sk, SCI_A, 'AN0', %NextPN %+ %1 ),
+  KS_SecY_3('SA_Transmit', KS, tid, KS_SecY)
+]
+
+rule Peer_SecY_Receive:
+let
+    sectag = < 'SECTAG', '88E5', 'AN0', %PN , SCI_A >
+    iv     = < SCI_A, %PN >
+    MPDU_in = Build_MACsec_Frame( SCI_A, 'AN0', %PN, sak_sk, payload )
+in
+[
+   !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B ),
+   P_RxSA( tid, 'peer', P_SecY, sak_p, SCI_A, 'AN0', %LowestPN ),
+   P_SecY_2( 'SA_Ready', P, tid, P_SecY ),
+   P_MACSec_Operational(tid, P, 'peer', P_SecY, %kn, 'AN0'),
+   In( MPDU_in )
+]
+--[ Peer_RxSA_Receive(tid, P, P_SecY, SCI_A, %LowestPN ), Eq(true, AES_GCM_sdecv( sak_p, iv, snd(snd(fst(MPDU_in))) , < DA(), SA(), sectag > )) ,
+    _restrict ( GEQ(%PN,%LowestPN) ) /* Replay check */
+  ]->
+[
+   P_RxSA( tid, 'peer', P_SecY, sak_p, SCI_A, 'AN0', %LowestPN %+ %1 ),
+   P_SecY_3( 'SA_Receive', P , tid, P_SecY )
+]
+
+#endif
 
 rule KS_Hello_Timer_Start:
 [
@@ -593,7 +675,7 @@ restriction SAK_Derive_Uniqueness:
 "All kn #i #j. SAK_Derive_Once(kn)@i & SAK_Derive_Once(kn)@j ==> #i = #j"
 
 restriction SAK_Install_Uniqueness:
-"All kn #i #j. SAK_Install_Once(kn)@i & SAK_Install_Once(kn)@j ==> #i = #j"
+"All tid kn #i #j. SAK_Install_Once(tid,kn)@i & SAK_Install_Once(tid,kn)@j ==> #i = #j"
 
 lemma MN_KS_strict_increase [use_induction, reuse]:
    "All KS tid ckn %mn1 %mn2 #i #j.
@@ -745,4 +827,11 @@ lemma post_compromise_security:
      ==> not (Ex #k. K(sak_new) @ k) | (Ex #m. RevealCAK(ckn)@m)
   "
 
+lemma peer_agreement_handshake:
+    " All KS mi_ks mn_ks_1 tid ckn #i1 #i2 .
+      MKPDU_KS_MKAHello(KS, mi_ks, mn_ks_1, tid, ckn)@i1 
+    & KS_Saw_Self_In_PPL(KS, mi_ks, mn_ks_1, tid, ckn)@i2
+    & not(Ex #i3. RevealCAK(ckn)@i3)
+    ==> (Ex P mi_p mn_p_1 #j. MKPDU_Peer_Hello(P, mi_p, mn_p_1, tid, ckn)@j)
+    "
 end 
