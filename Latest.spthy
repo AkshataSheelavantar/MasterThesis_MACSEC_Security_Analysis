@@ -49,7 +49,7 @@ functions:
 AES_GCM_senc/4, 
 AES_GCM_sdecv/4,
 AES_GCM_tag/3
-equations: AES_GCM_sdecv(K, IV, AES_GCM_senc(K, IV, P, AAD), AAD) = true
+equations: AES_GCM_sdecv(K, IV, AES_GCM_senc(K, IV, P, AAD), AAD) = P
 
 #endif
 
@@ -211,7 +211,7 @@ rule Bootstrap_SecY_KeyServer:
   ]
 --[ SecY_KS_Established(tid, KS , $SecY_A, ~SCI_A, ckn)]->
   [
-     !KeyServer_SecYCreated(tid, 'keyserver', KS, $SecY_A, ~SCI_A ),
+     !KeyServer_SecYCreated(tid, 'keyserver', KS, $SecY_A, ~SCI_A, ckn ),
      KS_SecY_0( 'Create', KS, tid, $SecY_A )
   ]
 
@@ -222,7 +222,7 @@ rule Bootstrap_SecY_Peer:
   ]
 --[ SecY_P_Established(tid, P , $SecY_B, ~SCI_B, ckn) ]->
   [
-     !Peer_SecYCreated(tid, 'peer', P, $SecY_B, ~SCI_B ),
+     !Peer_SecYCreated(tid, 'peer', P, $SecY_B, ~SCI_B, ckn ),
      P_SecY_0( 'Create', P, tid, $SecY_B )
   ]
 
@@ -369,7 +369,7 @@ let
     sak_p = AES_KW_unwrap( wsak , kek, RFC3394_IV() )
 in
 [ 
-  !P_KEK(P,kek,ckn), !Member(tid, P, Pae, cak, ckn, 'peer') , !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B ),
+  !P_KEK(P,kek,ckn), !Member(tid, P, Pae, cak, ckn, 'peer') , !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B, ckn ),
   Rcv_SAK_Wrapped(P, wsak, %kn, ckn)
 ]
 --[ P_SAKUnwrapped(P, tid, ckn, %kn) ]->
@@ -385,7 +385,7 @@ let
       MKPDU_in = Build_SAK_Install(mi_p, %mn_p_2, lpl, sak_use, ick)
 in
 [
-    !KS_ICK(KS,ick,ckn), !Member(tid, KS, Pae, cak, ckn, 'keyserver'), !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ),
+    !KS_ICK(KS,ick,ckn), !Member(tid, KS, Pae, cak, ckn, 'keyserver'), !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A, ckn ),
     KS_2( 'KS_2', KS, tid, Pae , mi_ks , %mn_ks_3 , mi_p, %mn_p_1, %kn ),
     In( MKPDU_in )
 ]
@@ -398,7 +398,7 @@ in
 // Create TxSC and RxSC for KeyServer (SC's are unidirectional channels!!
 rule KeyServer_SecY_Configure:
 [
-    !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ),
+    !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A, ckn ),
     KS_SecY_0( 'Create', KS, tid, KS_SecY ), KS_UpdateSecY( tid, 'keyserver', KS, KS_SecY, SCI_A , ckn )
 ]
 --[ KS_SecYConfig(tid, KS, KS_SecY ), OnlyOnce_KS_SC_Establish(),
@@ -412,7 +412,7 @@ rule KeyServer_SecY_Configure:
 // Create TxSC and RxSC for Peer (SC's are unidirectional channels!!
 rule Peer_SecY_Configure:
 [
-    !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B ), !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ),
+    !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B, ckn ), !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A, ckn ),
     P_SecY_0( 'Create', P, tid, P_SecY ), P_UpdateSecY( tid, 'peer', P, P_SecY, SCI_B , ckn )
 ]
 --[ P_SecYConfig(tid, P, P_SecY ), P_RxSC_Create(tid, P, P_SecY, SCI_A )  
@@ -425,7 +425,7 @@ rule Peer_SecY_Configure:
 /* Checking KeyServer for transmission */
 rule KeyServer_SecY_Enable:
 [
-    !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ), !SAK_KS('keyserver',KS,sak_sk,%kn),
+    !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A, ckn ), !SAK_KS('keyserver',KS,sak_sk,%kn),
     !KS_Tx_SC ( tid, 'keyserver', KS, KS_SecY, SCI_A ), 
     KS_SecY_1( 'SC_Init', KS, tid, KS_SecY )
 ]
@@ -440,7 +440,7 @@ rule KeyServer_SecY_Enable:
 /* Checking KeyServer for transmission */
 rule Peer_SecY_Enable:
 [
-    !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B ), !SAK_P('peer', P, sak_p, %kn),
+    !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B, ckn ), !SAK_P('peer', P, sak_p, %kn),
     !P_Rx_SC ( tid, 'peer', P, P_SecY, SCI_A ), 
     P_SecY_1( 'SC_Init', P, tid, P_SecY ),
     TxSA_Estd( tid, 'keyserver', KS, KS_SecY)
@@ -458,7 +458,7 @@ let
   %NextPN = %PN
   MPDU_out = Build_MACsec_Frame(SCI_A, 'AN0', %PN, sak_sk, ~payload)
 in
-[ !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ),
+[ !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A, ckn ),
   !SAK_KS('keyserver',KS,sak_sk,%kn), 
   KS_TxSA( tid, 'keyserver', KS_SecY, sak_sk, SCI_A, 'AN0', %NextPN ),
   KS_SecY_2('SA_Ready', KS, tid, KS_SecY),
@@ -479,7 +479,7 @@ let
     MPDU_in = Build_MACsec_Frame( SCI_A, 'AN0', %PN, sak_sk, payload )
 in
 [
-   !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B ),
+   !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B, ckn ),
    P_RxSA( tid, 'peer', P_SecY, sak_p, SCI_A, 'AN0', %LowestPN ),
    P_SecY_2( 'SA_Ready', P, tid, P_SecY ),
    P_MACSec_Operational(tid, P, 'peer', P_SecY, %kn, 'AN0'),
@@ -501,7 +501,7 @@ let
   %NextPN = %PN
   MPDU_out = Build_MACsec_Frame(SCI_A, 'AN0', %PN, sak_sk, ~payload)
 in
-[ !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A ),
+[ !KeyServer_SecYCreated(tid, 'keyserver', KS, KS_SecY , SCI_A, ckn ),
   !SAK_KS('keyserver',KS,sak_sk,%kn), 
   KS_TxSA( tid, 'keyserver', KS_SecY, sak_sk, SCI_A, 'AN0', %NextPN ),
   KS_SecY_2('SA_Ready', KS, tid, KS_SecY),
@@ -522,13 +522,14 @@ let
     MPDU_in = Build_MACsec_Frame( SCI_A, 'AN0', %PN, sak_sk, payload )
 in
 [
-   !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B ),
+   !Peer_SecYCreated(tid, 'peer', P, P_SecY, SCI_B, ckn ),
    P_RxSA( tid, 'peer', P_SecY, sak_p, SCI_A, 'AN0', %LowestPN ),
    P_SecY_2( 'SA_Ready', P, tid, P_SecY ),
    P_MACSec_Operational(tid, P, 'peer', P_SecY, %kn, 'AN0'),
    In( MPDU_in )
 ]
---[ Peer_RxSA_Receive(tid, P, P_SecY, SCI_A, %LowestPN ), Eq(true, AES_GCM_sdecv( sak_p, iv, snd(snd(fst(MPDU_in))) , < DA(), SA(), sectag > )) ,
+--[ Peer_RxSA_Receive(tid, P, P_SecY, SCI_A, %LowestPN ), Eq(payload, AES_GCM_sdecv( sak_p, iv, snd(snd(fst(MPDU_in))) , < DA(), SA(), sectag > )) , 
+    Peer_RxSA_Payload_retrieve(tid, P, P_SecY, AES_GCM_sdecv( sak_p, iv, snd(snd(fst(MPDU_in))) , < DA(), SA(), sectag > ), %PN, %kn, ckn),
     _restrict ( GEQ(%PN,%LowestPN) ) /* Replay check */
   ]->
 [
@@ -790,15 +791,6 @@ lemma SAK_freshness:
      & #i < #j
      ==> not (kn1 = kn2) 
   "
-lemma macsec_frame_integrity:
-  "All tid P P_SecY SCI_A PN #i.
-     Peer_RxSA_Receive(tid, P, P_SecY, SCI_A, PN) @ i
-     ==> (Ex KS KS_SecY #j.
-            KS_TxSA_Transmit(tid, KS, KS_SecY, SCI_A, PN) @ j
-            & #j < #i)
-         | (Ex kn #r. RevealSAK(kn) @ r)
-  "
-
 lemma key_confirmation_agreement:
   "All P tid ckn kn #i #j.
      MKPDU_Peer_SAKInstalled(P, ckn, tid, kn) @ i
@@ -826,7 +818,6 @@ lemma post_compromise_security:
      & (#i < #r) & (#r < #j)
      ==> not (Ex #k. K(sak_new) @ k) | (Ex #m. RevealCAK(ckn)@m)
   "
-
 lemma peer_agreement_handshake:
     " All KS mi_ks mn_ks_1 tid ckn #i1 #i2 .
       MKPDU_KS_MKAHello(KS, mi_ks, mn_ks_1, tid, ckn)@i1 
@@ -834,4 +825,25 @@ lemma peer_agreement_handshake:
     & not(Ex #i3. RevealCAK(ckn)@i3)
     ==> (Ex P mi_p mn_p_1 #j. MKPDU_Peer_Hello(P, mi_p, mn_p_1, tid, ckn)@j)
     "
+#ifdef GCM_IO
+lemma macsec_frame_integrity:
+  "All tid P P_SecY SCI_A PN #i.
+     Peer_RxSA_Receive(tid, P, P_SecY, SCI_A, PN) @ i
+     ==> (Ex KS KS_SecY #j.
+            KS_TxSA_Transmit(tid, KS, KS_SecY, SCI_A, PN) @ j
+            & #j < #i)
+         | (Ex kn #r. RevealSAK(kn) @ r)
+  "
+#endif
+#ifdef GCM_CI
+lemma macsec_frame_confidentiality_and_secrecy_strict:
+  "All tid P P_SecY payload PN kn ckn #i.
+       Peer_RxSA_Payload_retrieve(tid, P, P_SecY, payload, PN, kn, ckn)@#i
+       & not(Ex #i1. RevealCAK(ckn)@i1 )
+   ==> (Ex KS KS_SecY SCI_A #j.
+          KS_TxSA_Transmit(tid, KS, KS_SecY, SCI_A, PN)@#j
+        & #j < #i
+        & not(Ex #k. K(payload)@#k & #k < #i)) | (Ex #r. RevealSAK(kn)@#r & #r < #i)"
+#endif
+
 end 
